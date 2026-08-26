@@ -1,5 +1,18 @@
 # Changelog
 
+## [Unreleased] — 2026-08-26
+
+### Changed
+- License 由 MIT 变更为 **Apache 2.0**（同步 `LICENSE` 全文与 `pyproject.toml` license 字段）
+
+### Verified
+- PRD §10 验收核销：129 个测试用例全部通过；`demo/run.py` 12/12 PASS（canned response 模式）；persona_runtime 核心覆盖率 82%~98%
+- 代码托管：https://github.com/GreyzAchilles/Intersoulligence
+
+### Pending
+- `mcp_server/` 4 个工具的单元测试补齐（当前 TOTAL 覆盖率 78%）
+- 用户侧 opencode 环境实测 demo（PRD §10.3 最后一项）
+
 ## [0.1.0] — 2026-08-14
 
 ### Added

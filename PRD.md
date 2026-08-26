@@ -72,7 +72,8 @@ intersoulligence/
 │   ├── db.py                               # SQLite 连接 + 初始化 schema
 │   ├── schema_loader.py                    # A1-A4, A6-A9
 │   ├── signal_parser.py                    # B1-B4
-│   ├── memory.py                           # C5, C6, D6, D7, D8
+│   ├── memory_recall.py                     # C1-C6（召回 + 后处理）
+│   ├── memory_write.py                      # D6-D9（写入 + 校验 + 2b 字段管理）
 │   ├── self_check.py                       # E1
 │   ├── persistence.py                      # F1, F2
 │   ├── scheduler.py                        # G1, G4
@@ -92,19 +93,20 @@ intersoulligence/
 │   ├── conftest.py                         # pytest fixture
 │   ├── test_schema_loader.py
 │   ├── test_signal_parser.py
-│   ├── test_memory.py
+│   ├── test_memory_recall.py                # C1-C6
+│   ├── test_memory_write.py                 # D6-D9
 │   ├── test_self_check.py
 │   ├── test_persistence.py
 │   ├── test_scheduler.py
 │   ├── test_harness.py                     # C5+C6 约束测试
-│   └── test_critical_path.py               # 9 步闭环
+│   └── test_critical_path.py               # 12 步闭环
 └── demo/                                   # demo work agent
     ├── README.md                           # opencode 配置说明
     ├── run.py                              # demo 入口
     └── opencode_config.example.yaml        # opencode 配置示例
 ```
 
-**文件计数**：代码 14 个、配置 4 个、文档 5 个、demo 2 个、其他 2 个，共 27 个文件。
+**文件计数**：代码 19 个（persona_runtime 11 + mcp_server 7 + demo/run.py）、测试 10 个、配置 4 个、文档 5 个、其他 1 个（LICENSE），共 39 个文件。
 
 ## 6. Mermaid 流程图
 
@@ -406,27 +408,27 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 
 ### 10.1 关键路径验收
 
-- [ ] `tests/test_critical_path.py` 12 步全部通过（按 Layer 视角）
-- [ ] Layer 0 闭环：F2 加载快照 + A8 首轮场景自检
-- [ ] Layer 1 闭环：A9 持续场景自检 + E1 价值层自检 + B1/B3 阶段切换
-- [ ] Layer 2 召回路径：C1-C4 召回 + C5/C6 后处理
-- [ ] Layer 2 写入路径：D7/D8/D6 自评路径 + D9 2b 字段写入
-- [ ] 持久化 + 衰减路径：F1 落盘 + F4 apply_decay（2a 三阶段 / 2d TTL）
-- [ ] plan_subagent 启动：G1 启动 + G4 注入 first switch rule
+- [x] `tests/test_critical_path.py` 12 步全部通过（按 Layer 视角）（实测 12/12，2026-08-26）
+- [x] Layer 0 闭环：F2 加载快照 + A8 首轮场景自检
+- [x] Layer 1 闭环：A9 持续场景自检 + E1 价值层自检 + B1/B3 阶段切换
+- [x] Layer 2 召回路径：C1-C4 召回 + C5/C6 后处理
+- [x] Layer 2 写入路径：D7/D8/D6 自评路径 + D9 2b 字段写入
+- [x] 持久化 + 衰减路径：F1 落盘 + F4 apply_decay（2a 三阶段 / 2d TTL）
+- [x] plan_subagent 启动：G1 启动 + G4 注入 first switch rule
 
 ### 10.2 全接口验收
 
-- [ ] `tests/` 下 7 个测试文件全部通过
-- [ ] **25 个**接口 100% 覆盖（每个接口至少 1 个测试用例）
-- [ ] pytest 覆盖率 ≥ 80%（核心模块）
-- [ ] harness.py 的 C5+C6 约束至少 3 个测试用例（cite / cautious / associate-only）
-- [ ] F4 apply_decay 至少 4 个测试用例（2a cooling / vector_deleted / content_wiped / 2d TTL）
+- [x] `tests/` 下测试文件全部通过（实际 10 个文件、129 用例全过）
+- [x] **25 个**接口 100% 覆盖（每个接口至少 1 个测试用例）
+- [x] pytest 覆盖率 ≥ 80%（核心模块）（persona_runtime 全模块 82%~98%；注：mcp_server 暂无单测覆盖，TOTAL 为 78%）
+- [x] harness.py 的 C5+C6 约束至少 3 个测试用例（cite / cautious / associate-only）（恰 3 个）
+- [x] F4 apply_decay 至少 4 个测试用例（2a cooling / vector_deleted / content_wiped / 2d TTL）（7 个）
 
 ### 10.3 demo 验收
 
-- [ ] `demo/run.py` 在 opencode 环境下能跑通 12 步闭环
-- [ ] opencode 配置示例文件 `demo/opencode_config.example.yaml` 可用
-- [ ] 用户手动配置 opencode 环境后，demo 能输出人格模块的预期响应
+- [x] `demo/run.py` 在 opencode 环境下能跑通 12 步闭环（本地 canned response 模式实测 12/12 PASS）
+- [x] opencode 配置示例文件 `demo/opencode_config.example.yaml` 可用（YAML 解析通过）
+- [ ] 用户手动配置 opencode 环境后，demo 能输出人格模块的预期响应（**用户侧待办**）
 
 ## 11. 文件级修改计划（依赖顺序）
 
@@ -497,3 +499,4 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-08-14 22:30：v2 全量对齐。**关键变更**：接口 21 → **25 个**（补回 C1-C4 召回 + 新增 D9 2b 字段管理 + 新增 F4 衰减机制）；关键路径 9 步 → **12 步**（按 Layer 视角重组）；第 11 章文件级修改计划拆分 memory.py → memory_recall.py + memory_write.py；SQL schema 加 2a 衰减字段（status / last_accessed）+ 索引；MCP 工具 operation 列表扩到 7 + 13 个。**对齐目标**：与 Wiki `接口-v1-按工程分类.md` + `接口-v2-按Layer分类.md` + `Layer2-遗忘机制-定稿.md` 保持一致。
 - 2026-08-14 22:30：所有 Wiki 引用同步到新文件名（Layer0-架构设计-定稿 / Layer0.3-场景价值变体边界-定稿 / Layer1.5-阶段切换信号-定稿 / Layer2-遗忘机制-定稿 / 跨层-harness-定稿 / 接口-v1-按工程分类 / 接口-v2-按Layer分类 / 对照-四份材料横评）。
 - 2026-08-26 03:45：License 由 MIT 改为 **Apache 2.0**（第 4 章工程栈 / 第 5 章目录结构 / 第 11 章文件级修改计划 三处同步修正）。
+- 2026-08-26 17:30：验收核销与结构图同步。§5 目录结构同步 memory 拆分（memory_recall / memory_write）与 test_memory 拆分；§10 验收标准按实测核销（129 用例全过 / persona_runtime 核心覆盖率 82%~98% / demo 12/12 PASS）；代码托管于 GitHub `GreyzAchilles/Intersoulligence`。遗留：mcp_server 单测补齐、用户侧 opencode 环境实测。

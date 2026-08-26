@@ -17,6 +17,9 @@ dev = [
     "pytest-cov>=4.0",
 ]
 
+[project.urls]
+Repository = "https://github.com/GreyzAchilles/Intersoulligence"
+
 [project.scripts]
 intersoulligence-server = "mcp_server.server:main"
 
