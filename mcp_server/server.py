@@ -4,7 +4,7 @@
 persona_layer2_query / persona_runtime_op），通过 stdio transport 暴露给 work agent。
 
 来源：PRD §11 序号 23, §7.3
-       mcp 官方 Python SDK (FastMCP)
+       mcp 官方 Python SDK（2.x: MCPServer / 1.x: FastMCP，用法兼容）
 """
 
 from __future__ import annotations
@@ -24,9 +24,13 @@ from .tools import (
 )
 
 try:
-    from mcp.server.fastmcp import FastMCP
-except ImportError:  # pragma: no cover
-    FastMCP = None  # type: ignore[assignment]
+    # mcp >= 2.0：官方 SDK 将 FastMCP 更名为 MCPServer（@tool / run / stdio 用法兼容）
+    from mcp.server.mcpserver import MCPServer as FastMCP
+except ImportError:  # pragma: no cover - 依赖 mcp 1.x 时走此分支
+    try:
+        from mcp.server.fastmcp import FastMCP
+    except ImportError:  # pragma: no cover
+        FastMCP = None  # type: ignore[assignment]
 
 
 def _ensure_harness(state: dict[str, Any]) -> Harness:

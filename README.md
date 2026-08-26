@@ -88,13 +88,9 @@ intersoulligence/
 - ✅ `persona_runtime/` 全部模块代码（config / db / schema_loader / signal_parser / memory_recall / memory_write / self_check / persistence / scheduler / harness）
 - ✅ `mcp_server/` MCP server（4 工具：persona_layer0_get / persona_layer1_get / persona_layer2_query / persona_runtime_op）
 - ✅ `data/persona_schema.yaml` Layer 0/1 声明（YAML）
-- ✅ `tests/` 129 个用例全过（12 步关键路径 + 25 接口全覆盖；persona_runtime 覆盖率 82%~98%）
+- ✅ `tests/` 168 个用例全过（12 步关键路径 + 25 接口全覆盖 + MCP 4 工具；全项目覆盖率 92%）
 - ✅ `demo/` demo work agent（本地 canned response 实测 12/12 PASS）
 - ✅ GitHub 托管：https://github.com/GreyzAchilles/Intersoulligence
-
-**已知缺口**：
-
-- ⚠️ `mcp_server/` 尚无单元测试覆盖（4 工具目前经 critical path / demo 间接调用），TOTAL 覆盖率 78%
 
 ### 关键决策日志
 
@@ -109,9 +105,8 @@ intersoulligence/
 
 ### 下一步建议
 
-1. 补齐 `mcp_server/` 4 个工具的单元测试（TOTAL 覆盖率 78% → ≥80%）
-2. 用户手动配置 opencode 环境后实测 demo（PRD §10.3 最后一项用户侧待办）
-3. v2 规划：A5/A10 个性化路径、D1-D5 批量写入、E2-E5 自检调度、F3 会话总结、G2-G3 多 subagent 协作、H1-H2 跨 agent 一致性
+1. 用户手动配置 opencode 环境后实测 demo（PRD §10.3 最后一项用户侧待办）
+2. v2 规划：A5/A10 个性化路径、D1-D5 批量写入、E2-E5 自检调度、F3 会话总结、G2-G3 多 subagent 协作、H1-H2 跨 agent 一致性
 
 ## License
 

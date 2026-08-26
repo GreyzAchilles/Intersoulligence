@@ -73,10 +73,15 @@ CREATE INDEX IF NOT EXISTS idx_ledger_timestamp ON self_growth_ledger(timestamp)
 
 
 def connect(db_path: Path | str) -> sqlite3.Connection:
-    """建立 SQLite 连接，开启 WAL 模式 + 外键 + row factory。"""
+    """建立 SQLite 连接，开启 WAL 模式 + 外键 + row factory。
+
+    check_same_thread=False：MCP stdio 模式下工具处理器被派发到
+    任意工作线程执行，harness 单例连接必须跨线程可用；
+    写入串行化由 PRD §12（WAL + 单实例）保证。
+    """
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path))
+    conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL;")
     conn.execute("PRAGMA foreign_keys=ON;")

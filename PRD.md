@@ -420,7 +420,7 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 
 - [x] `tests/` 下测试文件全部通过（实际 10 个文件、129 用例全过）
 - [x] **25 个**接口 100% 覆盖（每个接口至少 1 个测试用例）
-- [x] pytest 覆盖率 ≥ 80%（核心模块）（persona_runtime 全模块 82%~98%；注：mcp_server 暂无单测覆盖，TOTAL 为 78%）
+- [x] pytest 覆盖率 ≥ 80%（核心模块）（全项目实测 92%：persona_runtime 82%~98%，mcp_server 88%~100%）
 - [x] harness.py 的 C5+C6 约束至少 3 个测试用例（cite / cautious / associate-only）（恰 3 个）
 - [x] F4 apply_decay 至少 4 个测试用例（2a cooling / vector_deleted / content_wiped / 2d TTL）（7 个）
 
@@ -500,3 +500,4 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-08-14 22:30：所有 Wiki 引用同步到新文件名（Layer0-架构设计-定稿 / Layer0.3-场景价值变体边界-定稿 / Layer1.5-阶段切换信号-定稿 / Layer2-遗忘机制-定稿 / 跨层-harness-定稿 / 接口-v1-按工程分类 / 接口-v2-按Layer分类 / 对照-四份材料横评）。
 - 2026-08-26 03:45：License 由 MIT 改为 **Apache 2.0**（第 4 章工程栈 / 第 5 章目录结构 / 第 11 章文件级修改计划 三处同步修正）。
 - 2026-08-26 17:30：验收核销与结构图同步。§5 目录结构同步 memory 拆分（memory_recall / memory_write）与 test_memory 拆分；§10 验收标准按实测核销（129 用例全过 / persona_runtime 核心覆盖率 82%~98% / demo 12/12 PASS）；代码托管于 GitHub `GreyzAchilles/Intersoulligence`。遗留：mcp_server 单测补齐、用户侧 opencode 环境实测。
+- 2026-08-26 18:10：补齐 mcp_server 单元测试（`tests/test_mcp_server.py` 39 用例），TOTAL 覆盖率 78% → **92%**。修复两个由测试暴露的缺陷：① mcp 2.x 移除 FastMCP 导致 server 入口 RuntimeError → `server.py` 改为 MCPServer（2.x）/ FastMCP（1.x）双版本导入兼容；② SQLite 连接开启 `check_same_thread=False`（MCP 工具处理器运行于任意工作线程，写入串行化仍由 PRD §12 WAL + 单实例保证）。遗留：用户侧 opencode 环境实测。
