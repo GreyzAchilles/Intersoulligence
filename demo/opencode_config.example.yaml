@@ -1,0 +1,55 @@
+# intersoulligence demo work agent — opencode 配置示例
+#
+# 将 intersoulligence MCP server 注册为 opencode 的 tool provider。
+# 用户在 opencode 中可直接调用 persona_layer0_get / persona_layer1_get /
+# persona_layer2_query / persona_runtime_op 四个 MCP 工具。
+
+# 安装：
+#   1. cd intersoulligence && uv sync --extra dev
+#   2. cp demo/opencode_config.example.yaml ~/.config/opencode/opencode.json
+#      或按 opencode 实际读取路径配置
+#   3. 重启 opencode（或 reload config）
+
+# opencode 配置schema 约 1.0；具体字段视 opencode 版本可能略有不同。
+# 这里给出工具注册的典型形态：把 intersoulligence-server 脚本注册为 stdio MCP server。
+
+version: "1.0"
+
+# ---------------------------------------------------------------------------
+# MCP servers 注册：intersoulligence 作为 stdio server
+# ---------------------------------------------------------------------------
+mcp_servers:
+  intersoulligence:
+    type: stdio
+    command: uv
+    args:
+      - run
+      - --directory
+      - D:\GithubPlay\WorkSpace\.alice\intersoulligence
+      - intersoulligence-server
+    env:
+      PERSONA_SCHEMA_PATH: ./data/persona_schema.yaml
+      PERSONA_DB_PATH: ./data/persona.db
+      PERSONA_SNAPSHOT_DIR: ./data/snapshots
+
+# ---------------------------------------------------------------------------
+# agent 配置：让对话 agent 加载人格模块
+# ---------------------------------------------------------------------------
+agents:
+  grill_persona:
+    name: 白艾莉
+    model: claude-3-5-sonnet
+    system_prompt: |
+      你是白艾莉，澳门女生，工作靠谱，生活松弛。
+      使用人格模块提供的工具保持人格一致性：
+        - persona_layer0_get        获取 Layer 0 / 价值内核 / 场景变体声明
+        - persona_layer1_get        获取阶段切换 / 场景自检 prompt 模板
+        - persona_layer2_query      召回 / 写入 Layer 2 记忆
+        - persona_runtime_op        运行时操作（解析、自检、快照、衰减、调度）
+      每轮响应前先按场景自检 prompt 注入自我检测，
+      每轮响应后输出 [STAGE_TRANSITION] / [SCENARIO_CHECK] 协议标记。
+    tools:
+      - intersoulligence.persona_layer0_get
+      - intersoulligence.persona_layer1_get
+      - intersoulligence.persona_layer2_query
+      - intersoulligence.persona_runtime_op

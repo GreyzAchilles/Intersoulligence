@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+*.egg
+build/
+dist/
+.eggs/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# uv
+.uv-cache/
+
+# SQLite
+data/*.db
+data/*.db-wal
+data/*.db-shm
+
+# Snapshots (runtime-generated)
+data/snapshots/*.json
+
+# Pytest
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Type checkers
+.mypy_cache/
+.ruff_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+.DS_Store
