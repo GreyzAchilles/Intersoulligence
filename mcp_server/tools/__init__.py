@@ -4,10 +4,12 @@ from .layer0 import persona_layer0_get
 from .layer1 import persona_layer1_get
 from .layer2 import persona_layer2_query
 from .runtime import persona_runtime_op
+from .system_prompt import persona_get_system_prompt
 
 __all__ = [
     "persona_layer0_get",
     "persona_layer1_get",
     "persona_layer2_query",
     "persona_runtime_op",
+    "persona_get_system_prompt",
 ]

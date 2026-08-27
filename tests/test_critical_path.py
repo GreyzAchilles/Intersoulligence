@@ -66,7 +66,8 @@ def test_step_02_snapshot_load_fresh(tmp_config, harness):
 def test_step_03_initial_scenario_check(tmp_config, harness):
     """3. 首轮场景自检 — A8 注入 prompt + B2 解析 initial 场景。"""
     prompt = schema_loader.A8_get_initial_scenario_check_prompt(tmp_config)
-    assert "[SCENARIO_CHECK] initial:" in prompt["scenario_self_check_initial"]["output_format"]
+    assert "emit_scenario_check" in prompt["scenario_self_check_initial"]["output_format"]
+    assert "initial" in prompt["scenario_self_check_initial"]["output_format"]
     parsed = signal_parser.B2_parse_scenario_check(
         "[SCENARIO_CHECK] initial: work_agent_mode\n[RESPONSE]好"
     )

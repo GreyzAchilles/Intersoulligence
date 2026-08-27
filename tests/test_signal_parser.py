@@ -49,6 +49,46 @@ def test_B1_multiple_takes_last():
 
 
 # ---------------------------------------------------------------------------
+# B1 dict（tool call 参数）输入 — 问题 2 结构化输出
+# ---------------------------------------------------------------------------
+def test_B1_parses_tool_call_dict():
+    out = signal_parser.B1_parse_stage_transition(
+        {"to": "plan_subagent", "confidence": "high"}
+    )
+    assert out == {"parsed": {"to": "plan_subagent", "confidence": "high"}}
+
+
+def test_B1_tool_call_dict_equals_string_result():
+    d = signal_parser.B1_parse_stage_transition(
+        {"to": "grill", "confidence": "low"}
+    )
+    s = signal_parser.B1_parse_stage_transition(
+        "[STAGE_TRANSITION]\nto: grill\nconfidence: low\n[/STAGE_TRANSITION]"
+    )
+    assert d == s
+
+
+def test_B1_tool_call_invalid_to_ignored(recwarn):
+    out = signal_parser.B1_parse_stage_transition(
+        {"to": "invalid_stage", "confidence": "high"}
+    )
+    assert out is None
+    assert len(recwarn) >= 1
+
+
+def test_B1_tool_call_invalid_confidence_ignored(recwarn):
+    out = signal_parser.B1_parse_stage_transition(
+        {"to": "grill", "confidence": "uber"}
+    )
+    assert out is None
+    assert len(recwarn) >= 1
+
+
+def test_B1_none_returns_none():
+    assert signal_parser.B1_parse_stage_transition(None) is None
+
+
+# ---------------------------------------------------------------------------
 # B2 parse_scenario_check
 # ---------------------------------------------------------------------------
 def test_B2_parses_initial():
@@ -78,6 +118,66 @@ def test_B2_missing_returns_none():
 def test_B2_switch_without_target_ignored(recwarn):
     resp = "[SCENARIO_CHECK] switch_to:\n[RESPONSE]好的"
     assert signal_parser.B2_parse_scenario_check(resp) is None
+
+
+# ---------------------------------------------------------------------------
+# B2 dict（tool call 参数）输入 — 问题 2 结构化输出
+# ---------------------------------------------------------------------------
+def test_B2_parses_tool_call_initial():
+    out = signal_parser.B2_parse_scenario_check(
+        {"mode": "initial", "target": "chatbot_mode"}
+    )
+    assert out["parsed"]["mode"] == "initial"
+    assert out["parsed"]["action"] == "initial"
+    assert out["parsed"]["target"] == "chatbot_mode"
+
+
+def test_B2_parses_tool_call_switch_to():
+    out = signal_parser.B2_parse_scenario_check(
+        {"mode": "switch_to", "target": "work_agent_mode"}
+    )
+    assert out["parsed"]["action"] == "switch_to"
+    assert out["parsed"]["target"] == "work_agent_mode"
+
+
+def test_B2_parses_tool_call_stay():
+    out = signal_parser.B2_parse_scenario_check({"mode": "stay", "target": ""})
+    assert out["parsed"]["action"] == "stay"
+
+
+def test_B2_tool_call_switch_without_target_ignored(recwarn):
+    out = signal_parser.B2_parse_scenario_check(
+        {"mode": "switch_to", "target": ""}
+    )
+    assert out is None
+    assert len(recwarn) >= 1
+
+
+def test_B2_tool_call_invalid_mode_ignored(recwarn):
+    out = signal_parser.B2_parse_scenario_check(
+        {"mode": "nope", "target": "chatbot_mode"}
+    )
+    assert out is None
+
+
+def test_B2_tool_call_initial_without_target_ignored(recwarn):
+    out = signal_parser.B2_parse_scenario_check({"mode": "initial", "target": ""})
+    assert out is None
+    assert len(recwarn) >= 1
+
+
+def test_B2_none_returns_none():
+    assert signal_parser.B2_parse_scenario_check(None) is None
+
+
+def test_B2_tool_call_dict_equals_string_result():
+    d = signal_parser.B2_parse_scenario_check(
+        {"mode": "switch_to", "target": "work_agent_mode"}
+    )
+    s = signal_parser.B2_parse_scenario_check(
+        "[SCENARIO_CHECK] switch_to: work_agent_mode\n[RESPONSE]好的"
+    )
+    assert d == s
 
 
 # ---------------------------------------------------------------------------

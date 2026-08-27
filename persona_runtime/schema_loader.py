@@ -43,6 +43,15 @@ def _get_schema(config: Config) -> dict[str, Any]:
     return _load_raw(config.schema_path)
 
 
+def get_raw_schema(config: Config) -> dict[str, Any]:
+    """返回已缓存的完整 persona schema 原始文档。
+
+    build_system_prompt 组装 Layer 0 身份 / Layer 1 表达时使用
+    （现有 A 接口只返回摘要，不暴露原始 doc）。
+    """
+    return _get_schema(config)
+
+
 def reset_cache() -> None:
     """重置加载缓存（测试用）。"""
     global _LOADED_SCHEMA, _SCHEMA_PATH
@@ -130,6 +139,7 @@ def A4_get_available_scenarios(
             "identity_anchor": s.get("identity_anchor", ""),
             "voice_tone": s.get("voice_tone", ""),
             "self_check_policy": s.get("self_check_policy", "harness_managed"),
+            "discriminator": s.get("discriminator", {}),
         }
         available.append(item)
     if filter_scenarios:
@@ -190,6 +200,9 @@ def A8_get_initial_scenario_check_prompt(config: Config) -> dict[str, Any]:
         warnings.warn("A8 initial scenario check missing")
     scenarios = A4_get_available_scenarios(config)["available_scenarios"]
     initial["available_scenarios"] = [s["name"] for s in scenarios]
+    initial["scenario_discriminators"] = {
+        s["name"]: s.get("discriminator", {}) for s in scenarios
+    }
     return {"scenario_self_check_initial": initial}
 
 
@@ -212,4 +225,10 @@ def A9_get_ongoing_scenario_check_prompt(
         return A8_get_initial_scenario_check_prompt(config)
     ongoing["current_scenario"] = current_scenario
     ongoing["available_scenarios"] = scenario_names
+    ongoing["scenario_discriminators"] = {
+        s["name"]: s.get("discriminator", {}) for s in scenarios
+    }
+    ongoing["discriminator"] = ongoing["scenario_discriminators"].get(
+        current_scenario, {}
+    )
     return {"scenario_self_check_ongoing": ongoing}

@@ -2,7 +2,7 @@
 #
 # 将 intersoulligence MCP server 注册为 opencode 的 tool provider。
 # 用户在 opencode 中可直接调用 persona_layer0_get / persona_layer1_get /
-# persona_layer2_query / persona_runtime_op 四个 MCP 工具。
+# persona_layer2_query / persona_runtime_op / persona_get_system_prompt 五个 MCP 工具。
 
 # 安装：
 #   1. cd intersoulligence && uv sync --extra dev
@@ -39,17 +39,15 @@ agents:
   grill_persona:
     name: 白艾莉
     model: claude-3-5-sonnet
+    # system_prompt 不再写死人格声明——由人格模块强制组装并注入：
+    # 启动时调用 persona_get_system_prompt 获取完整人格 system_prompt 并严格遵循。
     system_prompt: |
-      你是白艾莉，澳门女生，工作靠谱，生活松弛。
-      使用人格模块提供的工具保持人格一致性：
-        - persona_layer0_get        获取 Layer 0 / 价值内核 / 场景变体声明
-        - persona_layer1_get        获取阶段切换 / 场景自检 prompt 模板
-        - persona_layer2_query      召回 / 写入 Layer 2 记忆
-        - persona_runtime_op        运行时操作（解析、自检、快照、衰减、调度）
-      每轮响应前先按场景自检 prompt 注入自我检测，
-      每轮响应后输出 [STAGE_TRANSITION] / [SCENARIO_CHECK] 协议标记。
+      启动时先调用 persona_get_system_prompt 获取完整人格声明，然后严格遵循。
+      阶段切换 / 场景自检通过 persona_runtime_op 的 emit_stage_transition /
+      emit_scenario_check 结构化输出发送，响应文本中不要出现任何协议标记字面量。
     tools:
       - intersoulligence.persona_layer0_get
       - intersoulligence.persona_layer1_get
       - intersoulligence.persona_layer2_query
       - intersoulligence.persona_runtime_op
+      - intersoulligence.persona_get_system_prompt

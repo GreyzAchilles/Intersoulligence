@@ -38,3 +38,5 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+# Local opencode runtime config (machine-specific)
+opencode.json

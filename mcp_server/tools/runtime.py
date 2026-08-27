@@ -1,7 +1,7 @@
 """mcp_server.tools.runtime — persona_runtime_op 工具
 
 来源：PRD §11 序号 22, §7.3
-       接口-v1 跨层辅佐 + Layer 1 信号处理 + 持久化 + 调度（13 个 operations）
+       接口-v1 跨层辅佐 + Layer 1 信号处理 + 持久化 + 调度（15 个 operations）
 """
 
 from __future__ import annotations
@@ -26,6 +26,8 @@ VALID_OPS = {
     "apply_decay",
     "spawn_plan_subagent",
     "inject_plan_subagent_rule",
+    "emit_stage_transition",
+    "emit_scenario_check",
 }
 
 
@@ -104,6 +106,27 @@ def persona_runtime_op(
             )
         if operation == "inject_plan_subagent_rule":
             return scheduler.G4_inject_plan_subagent_first_switch_rule()
+        # 结构化输出（问题 2）：LLM 通过 tool call 发协议信号，不走文本通道
+        if operation == "emit_stage_transition":
+            parsed_out = signal_parser.B1_parse_stage_transition(params)
+            if not parsed_out:
+                return {"parsed": None}
+            b3 = signal_parser.B3_validate_stage_transition(
+                parsed_out["parsed"],
+                params.get(
+                    "harness_state", {"long_window_violation_rate": 0.0}
+                ),
+            )
+            return {"parsed": parsed_out["parsed"], "b3_validated": b3}
+        if operation == "emit_scenario_check":
+            parsed_out = signal_parser.B2_parse_scenario_check(params)
+            if not parsed_out:
+                return {"parsed": None}
+            b4 = signal_parser.B4_validate_scenario_check(
+                parsed_out["parsed"],
+                available_scenarios or params.get("available_scenarios", []),
+            )
+            return {"parsed": parsed_out["parsed"], "b4_validated": b4}
     except (ValueError, KeyError) as e:
         return {"error": f"{type(e).__name__}: {e}", "operation": operation}
     return {"error": "unreachable"}

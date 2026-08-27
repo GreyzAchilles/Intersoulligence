@@ -55,16 +55,25 @@
 - [x] `persona_layer1_get` 工具
 - [x] `persona_layer2_query` 工具
 - [x] `persona_runtime_op` 工具
+- [x] `persona_get_system_prompt` 工具（v1.1）
+
+### v1.1 debug 修复（见 `docs/Debug_v1_1.md`）
+- [x] 问题 1 — `Harness.build_system_prompt()` prompt 强制组装器 + MCP 第 5 工具下发
+- [x] 问题 2 — 结构化输出：`emit_stage_transition` / `emit_scenario_check` + B1/B2 dict 输入 + `process_turn(tool_calls)` + server 端 live harness 状态同步
+- [x] 问题 5 — 场景 `discriminator` 判定特征 + A8/A9 prompt 注入
 
 ### 数据
 - [x] SQLite schema（4 张表 + 衰减字段 + 索引）
-- [x] `persona_schema.yaml` — Layer 0/1 声明
+- [x] `persona_schema.yaml` — Layer 0/1 声明（含场景 discriminator 判定特征）
 
 ### 测试
 - [x] 12 步关键路径闭环
 - [x] 25 个接口全覆盖
 - [x] harness C5/C6 约束 3 用例
 - [x] F4 衰减 4 用例
+- [x] 210 用例全过（168 基线 + 42 v1.1 新增），覆盖率 93%
+- [ ] opencode 端到端实测（v1 验收唯一未完成项）— 见 `docs/TEST_LOG.md`
+- [ ] v1.1 重跑 6 阶段对话验收 — 见 `docs/Debug_v1_1.md` / `docs/TEST_LOG.md`
 
 ### demo
 - [x] `demo/run.py` — 12 步闭环

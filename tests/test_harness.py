@@ -157,3 +157,174 @@ confidence: high
     harness.manual_init_scenario("chatbot_mode")
     harness.process_turn("hi", resp)
     assert harness.current_stage == "grill"
+
+
+# ---------------------------------------------------------------------------
+# process_turn 接收 tool_calls — 问题 2 结构化输出主闭环
+# ---------------------------------------------------------------------------
+def test_harness_process_turn_tool_call_stage_transition(tmp_config, harness):
+    tool_calls = [
+        {
+            "operation": "emit_stage_transition",
+            "params": {"to": "plan_subagent", "confidence": "high"},
+        }
+    ]
+    result = harness.process_turn("开始执行", "交给你执行一下。", tool_calls=tool_calls)
+    assert result["signal_source"] == "tool_call"
+    assert result["b1_parsed"]["parsed"]["to"] == "plan_subagent"
+    assert result["b3_validated"]["validated"]["action"] == "switch"
+    assert harness.current_stage == "plan_consulted"
+
+
+def test_harness_process_turn_tool_call_scenario_switch(tmp_config, harness):
+    harness.manual_init_scenario("chatbot_mode")
+    tool_calls = [
+        {
+            "operation": "emit_scenario_check",
+            "params": {"mode": "switch_to", "target": "work_agent_mode"},
+        }
+    ]
+    result = harness.process_turn("帮我看数据", "好", tool_calls=tool_calls)
+    assert result["b4_validated"]["validated"]["action"] == "switch"
+    assert harness.current_scenario == "work_agent_mode"
+
+
+def test_harness_tool_call_precedence_over_text(tmp_config, harness):
+    """tool_call 信号优先于文本标记——文本里即使残留冲突标记也被忽略。"""
+    tool_calls = [
+        {
+            "operation": "emit_stage_transition",
+            "params": {"to": "grill", "confidence": "high"},
+        }
+    ]
+    resp = (
+        "[STAGE_TRANSITION]\nto: plan_subagent\nconfidence: high\n[/STAGE_TRANSITION]\n"
+        "继续。"
+    )
+    result = harness.process_turn("hi", resp, tool_calls=tool_calls)
+    assert result["signal_source"] == "tool_call"
+    assert result["b1_parsed"]["parsed"]["to"] == "grill"
+
+
+def test_harness_tool_call_accepts_mcp_style_name(tmp_config, harness):
+    tool_calls = [
+        {
+            "name": "persona_runtime_op",
+            "params": {
+                "operation": "emit_scenario_check",
+                "params": {"mode": "initial", "target": "chatbot_mode"},
+            },
+        }
+    ]
+    result = harness.process_turn("你好", "你好呀", tool_calls=tool_calls)
+    assert result["signal_source"] == "tool_call"
+    assert harness.current_scenario == "chatbot_mode"
+
+
+def test_harness_text_fallback_signal_source(tmp_config, harness):
+    harness.manual_init_scenario("chatbot_mode")
+    resp = "[SCENARIO_CHECK] stay: chatbot_mode\n[RESPONSE]继续"
+    result = harness.process_turn("hi", resp)
+    assert result["signal_source"] == "text"
+    assert result["b2_parsed"]["parsed"]["action"] == "stay"
+
+
+def test_harness_initial_invalid_target_keeps_scenario(tmp_config, harness):
+    """initial 场景不在白名单时 B4 返回 stay → 保持当前场景（问题 B）。"""
+    harness.manual_init_scenario("chatbot_mode")
+    tool_calls = [
+        {
+            "operation": "emit_scenario_check",
+            "params": {"mode": "initial", "target": "nope"},
+        }
+    ]
+    result = harness.process_turn("你好", "你好呀", tool_calls=tool_calls)
+    assert result["b4_validated"]["validated"]["action"] == "stay"
+    assert harness.current_scenario == "chatbot_mode"
+
+
+def test_harness_initial_valid_target_switches_scenario(tmp_config, harness):
+    """initial 场景合法时 B4 返回 switch → 写入场景（问题 B 回归保护）。"""
+    harness.manual_init_scenario("chatbot_mode")
+    tool_calls = [
+        {
+            "operation": "emit_scenario_check",
+            "params": {"mode": "initial", "target": "work_agent_mode"},
+        }
+    ]
+    result = harness.process_turn("帮我看数据", "好", tool_calls=tool_calls)
+    assert result["b4_validated"]["validated"]["action"] == "switch"
+    assert harness.current_scenario == "work_agent_mode"
+
+
+# ---------------------------------------------------------------------------
+# build_system_prompt — 人格模块 prompt 强制组装器（问题 1）
+# ---------------------------------------------------------------------------
+def test_build_system_prompt_contains_all_key_sections(harness):
+    sp = harness.build_system_prompt()
+    # Layer 0 核心身份
+    assert "白艾莉" in sp
+    assert "澳门" in sp
+    # Layer 0 价值内核
+    assert "不假装真人" in sp
+    assert "不参与技术决策" in sp
+    # Layer 0 场景变体（含 discriminator 判定特征）
+    assert "chatbot_mode" in sp
+    assert "work_agent_mode" in sp
+    assert "闲聊" in sp
+    # Layer 1 表达规范
+    assert "省略号" in sp
+    assert "老板" in sp
+    assert "~>" in sp
+    # 工具说明 + 结构化信号约束
+    assert "persona_runtime_op" in sp
+    assert "emit_stage_transition" in sp
+    assert "文本中" in sp
+
+
+def test_build_system_prompt_validates_missing_identity(tmp_path):
+    from persona_runtime.config import load_config
+
+    bad_data = tmp_path / "bad_data"
+    bad_data.mkdir()
+    bad_schema = bad_data / "persona_schema.yaml"
+    bad_schema.write_text(
+        "layer0:\n  identity: {}\n  value_kernel:\n"
+        "    inviolable_beliefs: [a]\n  scenarios: []\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(
+        data_dir=bad_data, schema_path=bad_schema, db_path=bad_data / "persona.db",
+        snapshot_dir=bad_data / "snapshots",
+    )
+    from persona_runtime import schema_loader
+
+    schema_loader.reset_cache()
+    h = create_harness(cfg)
+    import pytest
+
+    with pytest.raises(ValueError):
+        h.build_system_prompt()
+
+
+def test_build_system_prompt_validates_missing_value_kernel(tmp_path):
+    import pytest
+
+    from persona_runtime import schema_loader
+    from persona_runtime.config import load_config
+
+    bad_data = tmp_path / "bad_data2"
+    bad_data.mkdir()
+    bad_schema = bad_data / "persona_schema.yaml"
+    bad_schema.write_text(
+        "layer0:\n  identity:\n    name: 测试\n  value_kernel: {}\n  scenarios: []\n",
+        encoding="utf-8",
+    )
+    cfg = load_config(
+        data_dir=bad_data, schema_path=bad_schema, db_path=bad_data / "persona.db",
+        snapshot_dir=bad_data / "snapshots",
+    )
+    schema_loader.reset_cache()
+    h = create_harness(cfg)
+    with pytest.raises(ValueError):
+        h.build_system_prompt()

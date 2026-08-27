@@ -1,7 +1,8 @@
 """tests/test_mcp_server.py — mcp_server 单元测试
 
-覆盖 4 个 MCP 工具（persona_layer0_get / persona_layer1_get /
-persona_layer2_query / persona_runtime_op）+ server 构建与入口。
+覆盖 5 个 MCP 工具（persona_layer0_get / persona_layer1_get /
+persona_layer2_query / persona_runtime_op / persona_get_system_prompt）
++ server 构建与入口。
 """
 
 from __future__ import annotations
@@ -67,7 +68,7 @@ def test_layer1_stage_signal_prompt(tmp_config):
     from mcp_server.tools import persona_layer1_get
 
     result = persona_layer1_get("stage_signal_prompt", tmp_config)
-    assert "[STAGE_TRANSITION]" in result["data"]["stage_signal"]["format"]
+    assert "emit_stage_transition" in result["data"]["stage_signal"]["format"]
 
 
 def test_layer1_ongoing_requires_scenario(tmp_config):
@@ -198,7 +199,7 @@ def test_layer2_value_error_caught(conn):
 
 
 # ---------------------------------------------------------------------------
-# tools.runtime — persona_runtime_op（13 个 operations）
+# tools.runtime — persona_runtime_op（15 个 operations）
 # ---------------------------------------------------------------------------
 B1_RESP = "[STAGE_TRANSITION]\nto: plan_subagent\nconfidence: high\n[/STAGE_TRANSITION]"
 B2_RESP = "[SCENARIO_CHECK] stay: chatbot_mode\n[RESPONSE]好的"
@@ -337,6 +338,198 @@ def test_runtime_inject_plan_subagent_rule(tmp_config):
 
 
 # ---------------------------------------------------------------------------
+# tools.runtime — emit_* 结构化输出（问题 2）
+# ---------------------------------------------------------------------------
+def test_runtime_valid_ops_include_emit(tmp_config):
+    result = _op("nope", tmp_config)
+    assert "emit_stage_transition" in result["valid"]
+    assert "emit_scenario_check" in result["valid"]
+
+
+def test_runtime_emit_stage_transition(tmp_config):
+    result = _op(
+        "emit_stage_transition",
+        tmp_config,
+        {"to": "plan_subagent", "confidence": "high"},
+    )
+    assert result["parsed"] == {"to": "plan_subagent", "confidence": "high"}
+    assert result["b3_validated"]["validated"]["action"] == "switch"
+
+
+def test_runtime_emit_stage_transition_degraded(tmp_config):
+    result = _op(
+        "emit_stage_transition",
+        tmp_config,
+        {
+            "to": "plan_subagent",
+            "confidence": "high",
+            "harness_state": {"long_window_violation_rate": 0.25},
+        },
+    )
+    assert result["b3_validated"]["validated"]["action"] == "no_switch"
+
+
+def test_runtime_emit_stage_transition_missing_param(tmp_config):
+    result = _op("emit_stage_transition", tmp_config, {})
+    assert result == {"parsed": None}
+
+
+def test_runtime_emit_scenario_check_switch(tmp_config):
+    result = _op(
+        "emit_scenario_check",
+        tmp_config,
+        {"mode": "switch_to", "target": "work_agent_mode"},
+        available_scenarios=["chatbot_mode", "work_agent_mode"],
+    )
+    assert result["parsed"]["action"] == "switch_to"
+    assert result["b4_validated"]["validated"]["action"] == "switch"
+
+
+def test_runtime_emit_scenario_check_stay(tmp_config):
+    result = _op(
+        "emit_scenario_check",
+        tmp_config,
+        {"mode": "stay", "target": ""},
+        available_scenarios=["chatbot_mode"],
+    )
+    assert result["parsed"]["action"] == "stay"
+    assert result["b4_validated"]["validated"]["action"] == "stay"
+
+
+def test_server_emit_stage_updates_live_harness(srv):
+    mcp = srv._build_server()
+    res = asyncio.run(
+        mcp.call_tool(
+            "persona_runtime_op_tool",
+            {
+                "operation": "emit_stage_transition",
+                "params": {"to": "plan_subagent", "confidence": "high"},
+            },
+        )
+    )
+    payload = json.loads(res.content[0].text)
+    assert payload["parsed"]["to"] == "plan_subagent"
+    assert payload["b3_validated"]["validated"]["action"] == "switch"
+    h = srv._ensure_harness(srv._STATE)
+    assert h.current_stage == "plan_consulted"
+
+
+def test_server_emit_scenario_updates_live_harness(srv):
+    mcp = srv._build_server()
+    res = asyncio.run(
+        mcp.call_tool(
+            "persona_runtime_op_tool",
+            {
+                "operation": "emit_scenario_check",
+                "params": {"mode": "initial", "target": "chatbot_mode"},
+            },
+        )
+    )
+    payload = json.loads(res.content[0].text)
+    assert payload["parsed"]["target"] == "chatbot_mode"
+    h = srv._ensure_harness(srv._STATE)
+    assert h.current_scenario == "chatbot_mode"
+
+
+def test_server_emit_scenario_switch_updates_live_harness(srv):
+    h = srv._ensure_harness(srv._STATE)
+    h.current_scenario = "chatbot_mode"
+    mcp = srv._build_server()
+    res = asyncio.run(
+        mcp.call_tool(
+            "persona_runtime_op_tool",
+            {
+                "operation": "emit_scenario_check",
+                "params": {"mode": "switch_to", "target": "work_agent_mode"},
+            },
+        )
+    )
+    payload = json.loads(res.content[0].text)
+    assert payload["b4_validated"]["validated"]["action"] == "switch"
+    assert h.current_scenario == "work_agent_mode"
+
+
+def test_server_emit_scenario_invalid_initial_keeps_state(srv):
+    """initial target 不在白名单 → B4 返回 stay，live harness 场景保持原值（问题 B）。"""
+    h = srv._ensure_harness(srv._STATE)
+    h.current_scenario = "chatbot_mode"
+    mcp = srv._build_server()
+    res = asyncio.run(
+        mcp.call_tool(
+            "persona_runtime_op_tool",
+            {
+                "operation": "emit_scenario_check",
+                "params": {"mode": "initial", "target": "nope"},
+            },
+        )
+    )
+    payload = json.loads(res.content[0].text)
+    assert payload["b4_validated"]["validated"]["action"] == "stay"
+    assert h.current_scenario == "chatbot_mode"
+
+
+def test_server_emit_stage_uses_live_violation_rate(srv):
+    """emit_stage_transition 用 live 违规率做 B3 降档（问题 E）。"""
+    h = srv._ensure_harness(srv._STATE)
+    h.long_window_violation_rate = 0.25
+    mcp = srv._build_server()
+    res = asyncio.run(
+        mcp.call_tool(
+            "persona_runtime_op_tool",
+            {
+                "operation": "emit_stage_transition",
+                "params": {"to": "plan_subagent", "confidence": "high"},
+            },
+        )
+    )
+    payload = json.loads(res.content[0].text)
+    assert payload["b3_validated"]["validated"]["action"] == "no_switch"
+    assert h.current_stage == "grill"
+
+
+# ---------------------------------------------------------------------------
+# tools.system_prompt — persona_get_system_prompt（问题 1）
+# ---------------------------------------------------------------------------
+def test_system_prompt_contains_persona(tmp_config):
+    from mcp_server.tools import persona_get_system_prompt
+
+    result = persona_get_system_prompt(tmp_config)
+    assert "data" in result
+    sp = result["data"]["system_prompt"]
+    assert isinstance(sp, str)
+    assert "白艾莉" in sp
+    assert "不假装真人" in sp
+    assert "chatbot_mode" in sp
+    assert "work_agent_mode" in sp
+    assert "省略号" in sp
+
+
+def test_system_prompt_rejects_missing_schema(tmp_path):
+    from persona_runtime.config import load_config
+    from mcp_server.tools import persona_get_system_prompt
+
+    empty_dir = tmp_path / "empty"
+    empty_dir.mkdir()
+    cfg = load_config(
+        data_dir=empty_dir,
+        schema_path=empty_dir / "missing.yaml",
+        db_path=empty_dir / "persona.db",
+        snapshot_dir=empty_dir / "snapshots",
+    )
+    schema_loader.reset_cache()
+    result = persona_get_system_prompt(cfg)
+    assert "error" in result
+
+
+def test_server_call_system_prompt_tool_end_to_end(srv):
+    mcp = srv._build_server()
+    res = asyncio.run(mcp.call_tool("persona_get_system_prompt_tool", {}))
+    payload = json.loads(res.content[0].text)
+    assert "白艾莉" in payload["data"]["system_prompt"]
+    assert res.is_error is False
+
+
+# ---------------------------------------------------------------------------
 # server — 构建 + 注册 + stdio 入口
 # ---------------------------------------------------------------------------
 @pytest.fixture
@@ -371,6 +564,7 @@ def test_server_build_registers_four_tools(srv):
         "persona_layer1_get_tool",
         "persona_layer2_query_tool",
         "persona_runtime_op_tool",
+        "persona_get_system_prompt_tool",
     }
 
 

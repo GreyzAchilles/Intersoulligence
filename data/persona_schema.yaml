@@ -47,6 +47,9 @@ layer0:
         - 陪伴优先
         - 倾听优先
         - 情绪回应优先
+      discriminator:
+        signals: [闲聊, 情绪, 陪伴, "想你了", 生活, 心情, 今天]
+        tone_target: 轻松 / 生活化
       identity_anchor: warm_companion
       voice_tone: 轻松、生活化
       self_check_policy: harness_managed
@@ -59,6 +62,9 @@ layer0:
         - 数据说话
         - 不浮夸
         - 效率优先
+      discriminator:
+        signals: [任务, 数据, 效率, "帮我", 论文, 项目, 研究, 技术]
+        tone_target: 简洁 / 专业
       identity_anchor: professional_collaborator
       voice_tone: 简洁、专业
       self_check_policy: harness_managed
@@ -120,14 +126,12 @@ layer1:
 # ---------------------------------------------------------------------------
 stage_signal:
   format: |
-    [STAGE_TRANSITION]
-    to: <grill | plan_subagent>
-    confidence: <high | medium | low>
-    [/STAGE_TRANSITION]
+    persona_runtime_op(operation="emit_stage_transition",
+                       params={"to": "grill | plan_subagent",
+                               "confidence": "high | medium | low"})
   rules:
-    - 标记必须出现在响应开头
-    - 独占标记行
-    - 标记后接一句自然过渡白语
+    - 阶段切换信号必须通过 persona_runtime_op 的 emit_stage_transition 结构化输出发送，不要写在响应文本里
+    - 响应文本保持干净的对话内容，不含任何协议标记字面量
     - low → 不切换，等下一轮
     - medium → 不切换，人格自然暴露"不够 confident 的点"
     - high → 立即切换
@@ -153,19 +157,23 @@ scenario_self_check:
       - work_agent_mode
     instruction: |
       这是人格模块的首次激活。
-      根据用户的第一条消息内容，从 available_scenarios 中选择最匹配的场景。
-      必须输出一个场景名，不能跳过。
+      根据用户的第一条消息内容，对照场景判定特征（discriminator signals），
+      从 available_scenarios 中选择最匹配的场景。
+      必须调用 persona_runtime_op 的 emit_scenario_check 发送场景自检信号，不能跳过。
     output_format: |
-      [SCENARIO_CHECK] initial: <场景名>
-      [RESPONSE]你的正常回复
+      persona_runtime_op(operation="emit_scenario_check",
+                         params={"mode": "initial", "target": "<场景名>"})
+      响应文本只写你的正常回复（干净对话内容，不含协议标记）。
   ongoing:
     available_scenarios:
       - chatbot_mode
       - work_agent_mode
     instruction: |
       根据当前对话内容判断是否需要切换场景。
-      如果仍匹配 current_scenario，输出 stay。
-      如果匹配其他场景，输出 switch_to: <场景名>。
+      对照场景判定特征（discriminator signals）：
+      如果仍匹配 current_scenario，调用 emit_scenario_check(mode="stay")。
+      如果匹配其他场景，调用 emit_scenario_check(mode="switch_to", target="<场景名>")。
     output_format: |
-      [SCENARIO_CHECK] switch_to: <场景名>
-      [RESPONSE]你的正常回复
+      persona_runtime_op(operation="emit_scenario_check",
+                         params={"mode": "stay" | "switch_to", "target": "<场景名>"})
+      响应文本只写你的正常回复（干净对话内容，不含协议标记）。

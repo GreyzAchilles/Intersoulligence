@@ -11,7 +11,7 @@
 - **Layer 1 EXPRESSION**（半稳定）：语气 / 口头禅 / 称呼 / 蛐蛐 / 转场白语
 - **Layer 2 MEMORY**（MUTABLE）：2a 互动事实 / 2b 实体画像 / 2c 长期行为模式 / 2d 自我更新账本
 - **harness**：三环节（grill / plan / build）的主循环协调 + C5/C6 强制约束点
-- **MCP server**：4 个工具暴露给 work agent
+- **MCP server**：5 个工具暴露给 work agent
 
 设计来源见 `agent-human/` Wiki：
 
@@ -44,7 +44,7 @@ uv run intersoulligence-server
 ```
 intersoulligence/
 ├── persona_runtime/        # 人格模块核心（拆分：memory_recall / memory_write / persistence / harness）
-├── mcp_server/             # MCP server（4 工具）
+├── mcp_server/             # MCP server（5 工具）
 ├── data/                   # schema 声明 + SQLite db + 快照
 ├── tests/                  # pytest（test_critical_path + 6 个全接口测试）
 └── demo/                   # demo work agent
@@ -70,7 +70,7 @@ intersoulligence/
 
 > 这一段是给未来的 session 用的——恢复现场前先读这一段。
 
-### 当前状态（截至 2026-08-26）
+### 当前状态（截至 2026-08-27）
 
 **已完成**（设计 + Wiki 文档）：
 
@@ -86,9 +86,10 @@ intersoulligence/
 **已实施**（代码层，v0.1.0）：
 
 - ✅ `persona_runtime/` 全部模块代码（config / db / schema_loader / signal_parser / memory_recall / memory_write / self_check / persistence / scheduler / harness）
-- ✅ `mcp_server/` MCP server（4 工具：persona_layer0_get / persona_layer1_get / persona_layer2_query / persona_runtime_op）
+- ✅ `mcp_server/` MCP server（5 工具：persona_layer0_get / persona_layer1_get / persona_layer2_query / persona_runtime_op / persona_get_system_prompt）
 - ✅ `data/persona_schema.yaml` Layer 0/1 声明（YAML）
-- ✅ `tests/` 168 个用例全过（12 步关键路径 + 25 接口全覆盖 + MCP 4 工具；全项目覆盖率 92%）
+- ✅ `tests/` 205 个用例全过（12 步关键路径 + 25 接口全覆盖 + MCP 5 工具 + v1.1 新增 37 用例；全项目覆盖率 93%）
+- ✅ v1.1 debug 三项修复（`docs/Debug_v1_1.md`）：人格硬控制（build_system_prompt + 第 5 工具）/ 结构化信号（emit_* + B1/B2 dict 输入 + process_turn(tool_calls)）/ 场景判定量化（discriminator）
 - ✅ `demo/` demo work agent（本地 canned response 实测 12/12 PASS）
 - ✅ GitHub 托管：https://github.com/GreyzAchilles/Intersoulligence
 

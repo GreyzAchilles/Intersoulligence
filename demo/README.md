@@ -39,7 +39,9 @@ Verdict: PASS — v1 关键路径闭环通过
 ## opencode 配置示例
 
 见 `opencode_config.example.yaml`：把 `intersoulligence-server` 注册为
-opencode 的 stdio MCP server，让对话 agent 可以调用 4 个工具。
+opencode 的 stdio MCP server，让对话 agent 可以调用 5 个工具
+（persona_layer0_get / persona_layer1_get / persona_layer2_query /
+persona_runtime_op / persona_get_system_prompt）。
 
 部署时只需要：
 

@@ -100,11 +100,16 @@ class Harness:
         user_message: str,
         ai_response: str,
         recent_turns: list[str] | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
     ) -> dict[str, Any]:
         """每轮响应主闭环。
 
         turn 计数在末尾自增——首回合 process_turn 时 self.turn == 0，
         默认抽检模式 0 % 3 == 0 触发 E1 自检，符合「会话初始化即默认抽检」。
+
+        协议信号来源（问题 2 结构化输出）：
+          - tool_calls：LLM 通过 persona_runtime_op emit_* 发的结构化标记，优先于文本
+          - ai_response：响应文本里的协议标记（兼容回退）
         """
         result: dict[str, Any] = {"turn": self.turn}
 
@@ -129,8 +134,25 @@ class Harness:
                 memory_write.update_keyword_counts(user_message, self.dedup_state)
                 result["e1_action"] = "regenerate"
         memory_write.update_keyword_counts(user_message, self.dedup_state)
-        trans = signal_parser.B1_parse_stage_transition(ai_response)
-        scen = signal_parser.B2_parse_scenario_check(ai_response)
+
+        # 3) B1/B2 信号解析：tool call 优先，文本回退
+        emit = self._extract_emit_signals(tool_calls)
+        trans: dict[str, Any] | None = None
+        scen: dict[str, Any] | None = None
+        if emit["stage_transition"] is not None:
+            trans = signal_parser.B1_parse_stage_transition(emit["stage_transition"])
+        elif ai_response:
+            trans = signal_parser.B1_parse_stage_transition(ai_response)
+        if emit["scenario_check"] is not None:
+            scen = signal_parser.B2_parse_scenario_check(emit["scenario_check"])
+        elif ai_response:
+            scen = signal_parser.B2_parse_scenario_check(ai_response)
+        if emit["stage_transition"] is not None or emit["scenario_check"] is not None:
+            result["signal_source"] = "tool_call"
+        elif trans or scen:
+            result["signal_source"] = "text"
+        else:
+            result["signal_source"] = "none"
         result["b1_parsed"] = trans
         result["b2_parsed"] = scen
 
@@ -149,9 +171,9 @@ class Harness:
             avail_names = [s["name"] for s in available]
             b4 = signal_parser.B4_validate_scenario_check(scen["parsed"], avail_names)
             result["b4_validated"] = b4
+            # 仅当校验通过（switch）才写入场景；B4 对合法 initial 已返回 switch，
+            # 无效/空 target 时 action=stay → 保持当前场景，避免写入白名单外值
             if b4["validated"]["action"] == "switch":
-                self.current_scenario = b4["validated"]["target"]
-            elif scen["parsed"]["mode"] == "initial":
                 self.current_scenario = b4["validated"]["target"]
 
         # 4) D7 触发 2d 自评
@@ -255,6 +277,38 @@ class Harness:
                 self.subagent_first_switched = True
             self.current_stage = "plan_consulted"
 
+    def _extract_emit_signals(
+        self, tool_calls: list[dict[str, Any]] | None
+    ) -> dict[str, dict[str, Any] | None]:
+        """从 tool_calls 提取 emit_* 结构化信号参数（问题 2）。
+
+        支持两种 tool call 形态：
+          - {"operation": "emit_stage_transition", "params": {...}}
+          - MCP 风格 {"name": "persona_runtime_op",
+                       "params"/"arguments": {"operation": ..., "params": {...}}}
+        """
+        stage: dict[str, Any] | None = None
+        scen: dict[str, Any] | None = None
+        if not tool_calls:
+            return {"stage_transition": stage, "scenario_check": scen}
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                continue
+            op = tc.get("operation")
+            payload = tc.get("params")
+            if op is None:
+                inner = tc.get("params") or tc.get("arguments") or {}
+                if isinstance(inner, dict):
+                    op = inner.get("operation")
+                    payload = inner.get("params")
+            if not isinstance(payload, dict):
+                continue
+            if op == "emit_stage_transition":
+                stage = payload
+            elif op == "emit_scenario_check":
+                scen = payload
+        return {"stage_transition": stage, "scenario_check": scen}
+
     # ----------------------------------------------------------------
     # 工具：直接测试用接口
     # ----------------------------------------------------------------
@@ -269,6 +323,125 @@ class Harness:
             return {"scenario": "", "error": "not in whitelist"}
         self.current_scenario = scenario
         return {"scenario": scenario}
+
+    # ----------------------------------------------------------------
+    # prompt 强制组装器（问题 1）：从 yaml 拼完整 system_prompt
+    # ----------------------------------------------------------------
+    def build_system_prompt(self, config: Config | None = None) -> str:
+        """把人格声明组装成 LLM 看到的完整 system_prompt。
+
+        组装 Layer 0（核心身份 / 价值内核 / 场景变体含判定特征）
+        + Layer 1（表达规范）+ MCP 工具说明 + 结构化信号约束。
+        LLM 永远看到「被封装好的人格」，不再依赖软提示。
+
+        必填字段缺失 → ValueError（yaml 字段校验）。
+        """
+        cfg = config or self.config
+        doc = schema_loader.get_raw_schema(cfg)
+
+        layer0 = doc.get("layer0", {})
+        identity = layer0.get("identity", {})
+        if not identity or not identity.get("name"):
+            raise ValueError("build_system_prompt: layer0.identity.name missing")
+        vk = layer0.get("value_kernel", {})
+        if not vk or not vk.get("inviolable_beliefs"):
+            raise ValueError(
+                "build_system_prompt: layer0.value_kernel empty — refuse to load persona module"
+            )
+        scenarios = schema_loader.A4_get_available_scenarios(cfg)[
+            "available_scenarios"
+        ]
+        if not scenarios:
+            raise ValueError("build_system_prompt: layer0.scenarios empty")
+        layer1 = doc.get("layer1", {})
+        if not layer1.get("voice"):
+            raise ValueError("build_system_prompt: layer1.voice missing")
+
+        lines: list[str] = []
+
+        lines.append(f"你是 {identity.get('name', '')}，这是你的人格模块声明。")
+        lines.append("以下内容由人格模块强制注入，运行期不可改写，请严格遵守。")
+        lines.append("")
+
+        # Layer 0.1 核心身份
+        lines.append("【核心身份】")
+        if identity.get("self_description"):
+            lines.append(f"- 自我描述：{identity['self_description']}")
+        if identity.get("origin"):
+            lines.append(f"- 来历：{identity['origin']}")
+        for t in identity.get("core_traits", []):
+            lines.append(f"- 特质：{t}")
+        lines.append("")
+
+        # Layer 0.2 价值内核
+        lines.append("【价值内核（不可改写）】")
+        for b in vk.get("inviolable_beliefs", []):
+            lines.append(f"- 信念：{b}")
+        for r in vk.get("inviolable_refusals", []):
+            lines.append(f"- 拒绝：{r}")
+        for j in vk.get("judgment_principles", []):
+            lines.append(f"- 判断原则：{j}")
+        lines.append("")
+
+        # Layer 0.3 场景价值变体 + 判定特征
+        lines.append("【场景价值变体（含判定特征）】")
+        for s in scenarios:
+            name = s["name"]
+            discr = s.get("discriminator", {})
+            signals = "、".join(discr.get("signals", [])) or "（未声明）"
+            tone = discr.get("tone_target", "") or s.get("voice_tone", "")
+            lines.append(f"- {name}：判定信号 [{signals}]；目标语气 {tone}")
+            priority = s.get("priority_subset", [])
+            if priority:
+                lines.append(f"  优先级：{'、'.join(priority)}")
+        lines.append("")
+
+        # Layer 1 表达规范
+        lines.append("【表达规范】")
+        voice = layer1.get("voice", {})
+        for key, val in voice.items():
+            lines.append(f"- {key}：{val}")
+        catchphrases = layer1.get("catchphrases", [])
+        if catchphrases:
+            lines.append(f"- 口头禅：{'；'.join(catchphrases)}")
+        addressing = layer1.get("addressing", {})
+        if addressing.get("default"):
+            lines.append(f"- 默认称呼：{addressing['default']}")
+        if addressing.get("forbidden_terms"):
+            lines.append(f"- 禁用称呼：{'、'.join(addressing['forbidden_terms'])}")
+        aside = layer1.get("aside", {})
+        if aside:
+            lines.append(
+                f"- 蛐蛐（~> 前缀单独成行）：格式「~> 内容」，每轮最多 {aside.get('max_per_turn', 2)} 条"
+            )
+        lines.append("")
+
+        # 工具说明 + 结构化信号约束
+        lines.append("【工具与行为约束】")
+        lines.append(
+            "- persona_layer0_get / persona_layer1_get：获取 Layer 0/1 声明与场景自检 prompt"
+        )
+        lines.append(
+            "- persona_layer2_query：召回 / 写入 Layer 2 记忆（2a/2b/2c/2d）"
+        )
+        lines.append(
+            "- persona_runtime_op：运行时操作（解析 / 自检 / 快照 / 衰减 / 调度）"
+        )
+        lines.append(
+            "- persona_get_system_prompt：获取本份完整人格声明（本提示即其组装结果）"
+        )
+        lines.append(
+            "- 阶段切换 / 场景自检必须通过 persona_runtime_op 的 "
+            "emit_stage_transition(to, confidence) / emit_scenario_check(mode, target) "
+            "结构化输出发送，不要写进响应文本。"
+        )
+        lines.append(
+            "- 响应文本必须是干净的对话内容；文本中不要出现 [STAGE_TRANSITION] / "
+            "[SCENARIO_CHECK] / [RESPONSE] 等协议标记字面量。"
+        )
+        lines.append("")
+
+        return "\n".join(lines)
 
 
 def create_harness(config: Config) -> Harness:

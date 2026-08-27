@@ -28,7 +28,7 @@ harness 设计见 Wiki：`项目/agent-human/跨层-harness-定稿.md`
 | SQLite schema | 4 张表（2a/2b/2c/2d）+ 衰减字段（2a status/last_accessed + 2d TTL）+ 索引 |
 | persona_runtime | **25 个**接口的 Python 实现 |
 | harness | C5 + C6 强制约束点（人格模块自带的伦理边界） |
-| MCP server | 暴露 4 个工具（persona_layer0_get / persona_layer1_get / persona_layer2_query / persona_runtime_op） |
+| MCP server | 暴露 5 个工具（persona_layer0_get / persona_layer1_get / persona_layer2_query / persona_runtime_op / persona_get_system_prompt） |
 | demo work agent | opencode 形态，跑通 12 步闭环（按 Layer 视角） |
 | 关键路径测试 | 启动 → 加载 → 阶段切换 → plan_subagent → 召回 → 自评 → 持久化 → 衰减 |
 | 全接口测试 | 关键路径通过后补全 **25 个**接口的单元测试 |
@@ -86,7 +86,8 @@ intersoulligence/
 │       ├── layer0.py                       # persona_layer0_get
 │       ├── layer1.py                       # persona_layer1_get
 │       ├── layer2.py                       # persona_layer2_query
-│       └── runtime.py                      # persona_runtime_op
+│       ├── runtime.py                      # persona_runtime_op
+│       └── system_prompt.py                # persona_get_system_prompt（v1.1）
 ├── data/
 │   └── persona_schema.yaml                 # Layer 0/1 声明（YAML）
 ├── tests/                                  # 单元测试
@@ -339,7 +340,9 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
     load_latest_snapshot,
     apply_decay,
     spawn_plan_subagent,
-    inject_plan_subagent_rule
+    inject_plan_subagent_rule,
+    emit_stage_transition,
+    emit_scenario_check
   ]
   # 各 operation 不同的 params
 输出:
@@ -348,6 +351,8 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
   - operation 不识别 → 拒绝
   - 参数缺失 → 拒绝 + 缺失字段名
 ```
+
+> v1.1 补充：`emit_stage_transition` / `emit_scenario_check` 为结构化输出 operation（Debug_v1_1 问题 2）——LLM 通过 tool call 发送阶段切换 / 场景自检信号，不走文本通道；MCP server 端经 B3/B4 校验后同步 live harness 状态。
 
 ## 8. 关键路径测试（12 步闭环，按 Layer 视角）
 
@@ -501,3 +506,4 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-08-26 03:45：License 由 MIT 改为 **Apache 2.0**（第 4 章工程栈 / 第 5 章目录结构 / 第 11 章文件级修改计划 三处同步修正）。
 - 2026-08-26 17:30：验收核销与结构图同步。§5 目录结构同步 memory 拆分（memory_recall / memory_write）与 test_memory 拆分；§10 验收标准按实测核销（129 用例全过 / persona_runtime 核心覆盖率 82%~98% / demo 12/12 PASS）；代码托管于 GitHub `GreyzAchilles/Intersoulligence`。遗留：mcp_server 单测补齐、用户侧 opencode 环境实测。
 - 2026-08-26 18:10：补齐 mcp_server 单元测试（`tests/test_mcp_server.py` 39 用例），TOTAL 覆盖率 78% → **92%**。修复两个由测试暴露的缺陷：① mcp 2.x 移除 FastMCP 导致 server 入口 RuntimeError → `server.py` 改为 MCPServer（2.x）/ FastMCP（1.x）双版本导入兼容；② SQLite 连接开启 `check_same_thread=False`（MCP 工具处理器运行于任意工作线程，写入串行化仍由 PRD §12 WAL + 单实例保证）。遗留：用户侧 opencode 环境实测。
+- 2026-08-27：v1.1 debug 三项修复（详见 `docs/Debug_v1_1.md`）：① 问题 1 人格硬控制——`Harness.build_system_prompt()` prompt 强制组装器 + 第 5 个 MCP 工具 `persona_get_system_prompt`；② 问题 2 结构化输出——`persona_runtime_op` 扩到 15 个 operation（新增 emit_stage_transition / emit_scenario_check），B1/B2 支持 dict 输入，`process_turn` 收 tool_calls，server 端同步 live harness；③ 问题 5 场景判定量化——scenario 加 discriminator，A8/A9 注入判定清单。测试 205 用例全过，覆盖率 93%。

@@ -34,10 +34,32 @@ _SCENARIO_ONGOING_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# B1 parse_stage_transition(response)
+# B1 parse_stage_transition(response | tool_call_dict)
 # ---------------------------------------------------------------------------
-def B1_parse_stage_transition(response: str) -> dict[str, Any] | None:
-    """B1 — 解析 [STAGE_TRANSITION] 标记。缺失/不合法 → None。多个取最后一个。"""
+def _b1_from_dict(data: dict[str, Any]) -> dict[str, Any] | None:
+    """从 tool call 参数 dict 解析阶段切换（问题 2 结构化输出）。"""
+    to_raw = str(data.get("to", "")).strip()
+    conf_raw = str(data.get("confidence", "")).strip().lower()
+    if to_raw not in VALID_STAGES_FOR_TO:
+        warnings.warn(f"B1 invalid to: {to_raw} — ignored")
+        return None
+    if conf_raw not in CONFIDENCE_RANK:
+        warnings.warn(f"B1 invalid confidence: {conf_raw} — ignored")
+        return None
+    return {"parsed": {"to": to_raw, "confidence": conf_raw}}
+
+
+def B1_parse_stage_transition(response: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    """B1 — 解析 [STAGE_TRANSITION] 标记。缺失/不合法 → None。多个取最后一个。
+
+    支持两种输入（问题 2 结构化输出）：
+      - str：解析响应文本里的协议标记（兼容回退）
+      - dict：LLM 通过 persona_runtime_op emit_stage_transition 的 tool call 参数
+    """
+    if response is None:
+        return None
+    if isinstance(response, dict):
+        return _b1_from_dict(response)
     matches = list(_STAGE_RE.finditer(response))
     if not matches:
         return None
@@ -54,10 +76,43 @@ def B1_parse_stage_transition(response: str) -> dict[str, Any] | None:
 
 
 # ---------------------------------------------------------------------------
-# B2 parse_scenario_check(response)
+# B2 parse_scenario_check(response | tool_call_dict)
 # ---------------------------------------------------------------------------
-def B2_parse_scenario_check(response: str) -> dict[str, Any] | None:
-    """B2 — 解析 [SCENARIO_CHECK] 标记。无标记 → None（harness 保持当前场景）。"""
+def _b2_from_dict(data: dict[str, Any]) -> dict[str, Any] | None:
+    """从 tool call 参数 dict 解析场景自检（问题 2 结构化输出）。
+
+    mode: initial | switch_to | stay
+    """
+    mode = str(data.get("mode", "")).strip().lower()
+    target = str(data.get("target", "")).strip()
+    if mode == "initial":
+        if not target:
+            warnings.warn("B2 initial without target — ignored")
+            return None
+        return {"parsed": {"mode": "initial", "action": "initial", "target": target}}
+    if mode == "stay":
+        return {"parsed": {"mode": "ongoing", "action": "stay", "target": target}}
+    if mode == "switch_to":
+        if not target:
+            warnings.warn("B2 switch_to without target — ignored")
+            return None
+        return {"parsed": {"mode": "ongoing", "action": "switch_to", "target": target}}
+    warnings.warn(f"B2 invalid mode: {mode} — ignored")
+    return None
+
+
+def B2_parse_scenario_check(response: str | dict[str, Any] | None) -> dict[str, Any] | None:
+    """B2 — 解析 [SCENARIO_CHECK] 标记。无标记 → None（harness 保持当前场景）。
+
+    支持两种输入（问题 2 结构化输出）：
+      - str：解析响应文本里的协议标记（兼容回退）
+      - dict：LLM 通过 persona_runtime_op emit_scenario_check 的 tool call 参数
+    """
+    if response is None:
+        return None
+    if isinstance(response, dict):
+        return _b2_from_dict(response)
+
     initial_match = _SCENARIO_INITIAL_RE.search(response)
     if initial_match:
         target = initial_match.group(1).strip()
