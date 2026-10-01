@@ -25,7 +25,7 @@ mcp_servers:
     args:
       - run
       - --directory
-      - D:\GithubPlay\WorkSpace\.alice\intersoulligence
+      - D:\GithubPlay\WorkSpace\intersoulligence
       - intersoulligence-server
     env:
       PERSONA_SCHEMA_PATH: ./data/persona_schema.yaml
