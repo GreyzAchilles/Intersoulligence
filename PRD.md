@@ -37,6 +37,19 @@
 - 真实 LLM API 调用（Claude / GPT / 豆包等）—— demo 走 opencode，不接 API key
 - v2 阶段加入的接口（A5/A10 个性化路径 / D1-D5 批量写入 / E2-E5 自检调度 / F3 会话总结 / G2-G3 多 subagent 协作 / H1-H2 跨 agent 一致性）
 
+### 3.3 v2 范围（2026-10-01 设计定稿，未实施）
+
+> 设计全文见 `ARCHITECTURE.md` §13（主题定位 / 三条 ADR / 接口契约 / 里程碑）。功能追踪见本文档 §15「v2」段。
+
+**纳入项**：
+
+- 记忆生命线全组接口：D1 append_2a_entry / D2 append_2a_batch / F3 persist_session_summary / 2c 聚类 deep cycle / 2d→Layer 1 演化应用（overlay + A11）/ 语义召回（C1 双路 + C5 联动）
+- StorageBackend Port/Adapter 契约 + SQLiteAdapter 参考实现 + sqlite-vec 向量后端 + EmbeddingProvider 接口（**supersede 决策「SQLite 单实例不走 Postgres」的 v1 范围限定**，后端选型交还用户）
+- persona bundle 规范（manifest / persona.yaml / overlay.yaml / memory JSONL / content markdown 投影；.isoul 仅传输态）
+- 验收：MCP server 冒烟 + canned 记忆增长闭环（E2E 策略变更见 §18）
+
+**不纳入项**：H1/H2、A5/A10、E2-E5、G2/G3 顺延 v3；关系型第二后端仅保证接口就绪不交付实施；完整 6 阶段真 LLM 验收延后至产品成型。
+
 ## 4. 工程栈
 
 | 项 | 选择 | 备注 |
@@ -432,6 +445,7 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-08-27：v1.1 debug 三项修复（详见 §16）：① 问题 1 人格硬控制——`Harness.build_system_prompt()` prompt 强制组装器 + 第 5 个 MCP 工具 `persona_get_system_prompt`；② 问题 2 结构化输出——`persona_runtime_op` 扩到 15 个 operation（新增 emit_stage_transition / emit_scenario_check），B1/B2 支持 dict 输入，`process_turn` 收 tool_calls，server 端同步 live harness；③ 问题 5 场景判定量化——scenario 加 discriminator，A8/A9 注入判定清单。测试 205 用例全过，覆盖率 93%。
 - 2026-10-01：**文档整合**。架构设计知识收敛至 `ARCHITECTURE.md`；本文档吸收原 `docs/FEATURES.md`（→ §15）、`docs/Debug_v1_1.md`（→ §16）、`docs/CHANGELOG.md`（→ §17）、`docs/TEST_LOG.md`（→ §18）；原 §6 流程图迁移至 ARCHITECTURE §10.3。文档总数 7 → 3（README / ARCHITECTURE / PRD）。
 - 2026-10-01：**接口计数勘误 25 → 28**。Wiki `接口-v1-按工程分类.md` 汇总表「42 → 25」为算术错误——其各类保留数 8 + 4 + 6 + 4 + 1 + 3 + 2 + 0 = 28，与逐接口枚举一致；§1 公式「B8 / C10」笔误同步修正为「B4 / C6」。历史条目中的「25 个」保留原文不改，仅改活文档。
+- 2026-10-01：**v2 设计定稿**（`ARCHITECTURE.md` §13 新增，本文档 §3.3 / §15 / §18 同步）。五项决策：① v2 主题 = 记忆生命线（写侧缺口：2a/2c 零运行时写入、2d 无应用），H1/H2 等顺延 v3；② ADR-1 语言策略——Python 编排层不换，计算下沉引擎，profiling 门槛先行；③ ADR-2 存储抽象 StorageBackend 可插拔（**supersede v1「SQLite 单实例不走 Postgres」**），SQLite 参考实现 + sqlite-vec 向量后端；④ ADR-3 persona bundle 规范（四角色格式拆分、目录常态 + .isoul 传输态、manifest Layer 0 哈希、DB 为源 markdown 为投影）；⑤ **E2E 策略变更**——完整 6 阶段真 LLM 验收延后至产品成型，当前验收线 = MCP 冒烟 + canned 记忆增长闭环。v1.1 搁置问题 4（2b vs 2d 边界）随 F3 契约定稿，其余分级处置（§13.6）。
 
 ## 15. 功能追踪（原 docs/FEATURES.md）
 
@@ -513,6 +527,40 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 #### demo
 - [x] `demo/run.py` — 12 步闭环
 - [x] opencode 配置示例
+
+### v2 — 设计定稿（2026-10-01，未实施）
+
+> 设计全文见 `ARCHITECTURE.md` §13；实施范围见本文档 §3.3；里程碑 M1-M5 与验收线见 §13.6。以下条目在对应里程碑完成时勾选。
+
+#### 设计与决策
+- [x] v2 主题定稿：记忆生命线（H1/H2、A5/A10、E2-E5、G2/G3 顺延 v3）
+- [x] ADR-1 语言策略（Python 编排层 + profiling 门槛）
+- [x] ADR-2 存储抽象 StorageBackend（supersede v1「SQLite 单实例」的 v1 范围限定）
+- [x] ADR-3 persona bundle 规范（四角色格式 + manifest Layer 0 哈希 + JSONL 交换 + markdown 投影）
+- [x] E2E 策略变更（完整真 LLM 验收延后至产品成型）
+
+#### M1 存储契约
+- [ ] StorageBackend Port/Adapter 契约（InteractionRepo / EntityRepo / PatternRepo / LedgerRepo / SnapshotStore）
+- [ ] SQLiteAdapter 重构（约 15 个生产函数去 conn 化 + 4 处方言移植点消除）
+- [ ] 测试迁移（约 25 个改动点：conftest 4 个 INSERT helper + 13 处 SELECT 断言 + FlakyConn 重写）
+- [ ] EmbeddingProvider 接口定义
+
+#### M2 写侧闭环
+- [ ] D1 `append_2a_entry` + D2 `append_2a_batch`
+- [ ] Scribe 对话→2a 提取（规则提取起步）
+- [ ] F3 `persist_session_summary`（2a episode + 2b 经 D9 + markdown 投影；随此定稿 2b vs 2d 边界）
+
+#### M3 语义召回
+- [ ] sqlite-vec 向量后端 + `find_similar`
+- [ ] C1 双路召回 + C5 三档联动 + F4 向量删除对齐
+
+#### M4 演化应用
+- [ ] 2c 聚类 deep cycle（Librarian，confidence 只增 / evidence 累计）
+- [ ] overlay.yaml 覆盖层 + A11 `load_persona_overlay` + Layer 0 拒改校验
+
+#### M5 验收
+- [ ] MCP server 冒烟（启动 + 5 工具全部可调用）
+- [ ] canned 记忆增长闭环（对话 → 2a → 召回 → F3 → 2b/投影 → 2c/overlay）
 
 ## 16. v1.1 Debug 修复记录（原 docs/Debug_v1_1.md）
 
@@ -688,6 +736,8 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 
 ## 18. 端到端验收日志（原 docs/TEST_LOG.md）
 
+> **策略变更（2026-10-01，v2 设计定稿）**：完整 6 阶段 opencode + 真 LLM 端到端验收**延后至产品成型阶段**（届时需先建测试基准与实例）。v1/v2 当前验收线降为：MCP server 冒烟（5 工具可调用）+ canned 记忆增长闭环，见 `ARCHITECTURE.md` §13.6。以下模板原样保留，待产品成型后启用。
+>
 > 用 opencode 模拟正常用户使用 intersoulligence，验证 v0.1.0 在真实 LLM 链路下的可用性。**这是 v1 阶段唯一未验收项**（§10.3 Pending）。输入由用户填写，输出由测试 agent 在跑完测试后填写。原 `docs/TEST_LOG.md`，2026-10-01 并入。
 
 ### 测试元信息

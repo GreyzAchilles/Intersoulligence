@@ -414,7 +414,7 @@ build_done
 - Layer 2 的内容**完全一致**（记忆不分裂）
 - 仅激活的场景（Layer 0.3）和表达层微调（Layer 1）允许根据 agent 类型差异化
 
-v1 不做跨 agent 共享（PRD §3.2 非目标）；一致性约束由 v2 的 H1-H2 接口保证。
+v1 不做跨 agent 共享（PRD §3.2 非目标）；跨 agent 一致性（H1-H2）在 v2 设计定稿时顺延至 v3（§13.1），载体为 persona bundle（§13.4）。
 
 ## 10. harness 运行时机制
 
@@ -577,7 +577,7 @@ v1 按工程调用时机分为七类（A 加载 / B 解析 / C 召回 / D 写入
 | G1 spawn_plan_subagent | 1.5 | 启动 plan subagent + 注入 Layer 0.4 规则 | G 调度 |
 | G4 inject_plan_subagent_first_switch_rule | 1.5 | 首次切换注入 first switch rule（permanent） | G |
 
-> v2 待加入：A5/A10 个性化路径、D1-D5 批量写入、E2-E5 自检调度、F3 会话总结、G2-G3 多 subagent 协作、H1-H2 跨 agent 一致性。
+> v2 已定稿范围（2026-10-01）：记忆生命线——D1/D2 写入、F3 会话总结、2c 聚类、2d→Layer 1 演化应用、语义召回，见 §13；A5/A10、E2-E5、G2/G3、H1-H2 顺延 v3。
 
 ## 12. 设计来源与已知设计-实现差异
 
@@ -605,3 +605,158 @@ v1 按工程调用时机分为七类（A 加载 / B 解析 / C 召回 / D 写入
 | 自检加强版 prompt | ≥25% 时「全检 + 加强版」 | 全检使用同一 prompt，加强版未拆分 |
 
 与 Wiki 定稿冲突时：设计准绳以 Wiki 为准，实现现状以本仓库代码 + PRD §15 功能追踪为准；新差异应记入本表。
+
+## 13. v2 设计定稿（2026-10-01）
+
+> 本节是 v2 设计的单一权威来源（与用户逐项对齐后定稿）。工程实施范围见 PRD §3.3，功能追踪见 PRD §15「v2」段。§1-§12 描述 v1 现状，与本节冲突时以本节为准。
+
+### 13.1 定位与主题：记忆生命线
+
+**v2 的一句话**：v1 完成了「能跑通闭环」，v2 解决「能长期活着」。
+
+v1 经代码核实的三个写侧缺口（2026-10-01 盘点）：
+
+1. **2a / 2c 零运行时写入路径**：28 个 v1 接口中 D 类只覆盖 2b/2d；`interaction_memory` 与 `long_term_patterns` 两张表在生产代码中没有任何 INSERT——唯一写入来源是 `tests/conftest.py` 的测试夹具裸写 SQL。Wiki 砍 D1-D5 时所写的「2a 由 C1 召回后由 harness 调度」在 v1 从未落地。
+2. **遗忘机制衰减的是永不写入的数据**：F4 的三阶段衰减、C5/C6 召回后处理在真实使用中只能命中预置数据——真实使用一个月，人格的记忆不会增长。
+3. **2d 只有账本、没有应用**：2d 记录「我变了」，但 Layer 1 永远不会被真的改（修改路径仍是创建者改 yaml）——人格会记日记，不长个子。
+
+**主题取舍**：v2 主攻记忆生命线；H1/H2 跨 agent 可移植、A5/A10 多人格管理、E2-E5 自检智能化、G2/G3 多 subagent 协作顺延 v3。理由：没有增长的记忆，「带走」无物可带，可移植与个性化都是在静态记忆上做文章。
+
+### 13.2 ADR-1 语言策略：Python 编排层，计算下沉引擎
+
+**决策**：v2 不引入第二语言。
+
+- **延迟预算**：每轮 harness 侧工作（B 解析 / C 召回 / D 写入 / E 自检）为微秒-毫秒级，同轮 LLM 调用为百毫秒-秒级——模块是 LLM-bound 与 I/O-bound，不是 CPU-bound。单用户人格一年 2a 记录约万行量级，SQLite 微秒级响应。
+- **「重」的计算已下沉**：SQLite 本体是 C；语义召回走 sqlite-vec 同库扩展；MCP 序列化开销与语言无关。
+- **分发成本**：单一产物 `uvx intersoulligence-server` 即装即用；双语言意味着构建链、210 个测试、贡献门槛全部翻倍。对「铲子」定位的开源项目，分发简单 > 运行快。
+
+**profiling 门槛（先测量，后搬家）**：冷启动 < 1s（MCP stdio 每会话冷启动）、每轮 harness 开销 p99 < 50ms。超门槛先测瓶颈，议局部下沉，不做整体迁移。
+
+**迁移触发条件（唯一）**：人格模块脱离 MCP、以库形态嵌入非 Python 宿主（桌面客户端 / SillyTavern 类前端）→ 届时走「编译型核心 + 语言绑定」，由产品形态驱动，不由接口频率驱动。
+
+### 13.3 ADR-2 存储抽象：StorageBackend Port/Adapter
+
+**决策**：存储能力收敛为接口契约，后端选型交给用户。**本决策正式 supersede v1 决策「SQLite 单实例 + WAL、不走 Postgres 路线」**——该决策限于 v1 单机单实例实施范围；SQLite 降级为参考实现。
+
+**耦合现状（2026-10-01 代码盘点）**：22 处 SQL 执行点全部封闭在 `memory_recall` / `memory_write` / `persistence` 三模块的 7 个仓储函数内；harness 与 mcp_server 零 SQL；出口已是后端无关 dict（Row 按名取值 → 手写映射）；F1/F2 快照已是 JSON 文件、天然后端无关。改造属边界清晰的中等重构：生产侧约 15 个函数去 conn 化，测试侧约 25 个改动点；C5/C6/D7/D8/E1/B*/G* 纯逻辑层零改动。
+
+**仓储划分与方法契约**：
+
+| 仓储（Port） | 方法 | 现有挂点 |
+|---|---|---|
+| `InteractionRepo`（2a） | `append_entry`（D1 新增）/ `append_batch`（D2 新增）/ `find_by_entities` / `find_similar`（§13.5 语义召回）/ `touch_access` / `decay_scan` | C1 内 `_query_2a` + F4 2a 段 |
+| `EntityRepo`（2b） | `get` / `upsert_field` | C2 + D9 |
+| `PatternRepo`（2c） | `query` / `upsert_from_cluster`（§13.5 聚类） | C3 |
+| `LedgerRepo`（2d） | `append` / `recent` | D6 + C4 |
+| `SnapshotStore` | `save` / `load` | F1/F2（现有 JSON 文件实现直接转正） |
+
+**EmbeddingProvider 独立接口**：向量生成与存储解耦；默认本地小模型（1B-7B 量化方向），可配置 API。
+
+**方言移植点（SQLite → 通用，4 处）**：
+
+1. `DEFAULT (datetime('now'))` 列默认值 → 写入侧 Python 生成（`_now_iso()` 已有三处实现，统一即可）
+2. F4 的 `datetime(?, '-N days')` 日期算术下推 → `decay_scan` 返回候选行 + Python 过滤（数据量小，可行）
+3. C1 的 `entities LIKE '%"x"%'` 模拟 JSON 包含 → 语义方法 `find_by_entities`，契约禁止透传 SQL 片段
+4. `row_factory` / `lastrowid` → 统一行协议（dict）+ id 生成归仓储
+
+**实现矩阵**：`SQLiteAdapter`（参考实现，v1 schema 平移）→ `sqlite-vec` 向量后端（同库扩展，零部署，契合分发）→ 关系型第二后端（接口就绪，不在 v2 交付）。
+
+**MCP 侧**：`persona_layer2_query` / `persona_runtime_op` 的 conn 参数改为注入 backend；对 LLM / work agent 的 5 工具面不变。
+
+### 13.4 ADR-3 persona bundle：人格文件的存在形式
+
+v1 的空白：`persona_schema.yaml` / `persona.db` / `snap_*.json` / MCP JSON 四种文件形态是工程实施长出来的，「人格文件以什么形式存在」从未被正面回答。v2 按四角色拆分：
+
+| 角色 | 谁写 | 格式 | 理由 |
+|---|---|---|---|
+| 创作（Layer 0/1 声明） | 人（模块创建者） | YAML | 注释 / diff / 多行文本的人机工学 |
+| 传输（MCP 边界 / 跨 agent） | 机 | JSON | 协议强制；YAML 不是好的线上格式 |
+| 查询态（Layer 2 记忆） | 机，高频 | 数据库（后端可插拔，§13.3） | 事务 / 索引 / 衰减更新 |
+| 长文本叙事（2d 反思长文 / F3 总结 / 背景故事） | 机，低频读 | Markdown（投影） | 人直接可读、git 可 diff |
+
+**bundle 目录结构**：
+
+```
+persona-bundle/
+├── manifest.json    # bundle_version / identity_id / layer0_hash / memory_schema_version
+├── persona.yaml     # Layer 0/1 创作态
+├── overlay.yaml     # Layer 1 演化覆盖层（机写，见 13.5；可缺省）
+├── memory/          # 后端无关 JSONL 交换格式（2a/2b/2c/2d 各一）
+├── content/         # 长文本 markdown 投影（随 F1 快照生成）
+└── snapshots/       # F1 快照
+```
+
+**关键规则**：
+
+1. **目录为常态，`.isoul`（zip）仅为传输投影**；解压后全是普通文件，即读即改（已与用户确认）。
+2. **manifest.layer0_hash 只覆盖 persona.yaml（PROTECTED 层）**：改记忆 / 长文本不破坏校验；persona.yaml 变更使哈希失效 = 「这不是同一个人格」，走模块版本升级重新生成 manifest。哈希即跨 agent「同一人格」的数学证明——v3 H1/H2 的校验锚点。
+3. **DB 为源、markdown 为投影**：运行时长文本生在存储 TEXT 列，投影随 F1 每 20 轮输出；不做「文件系统为源」的内容寻址（出现会话间隙直读文件的实时消费者前不升级）。
+4. **memory/*.jsonl 为后端无关交换格式**：可插拔后端下 bundle 不再直接装 `memory.db`；导入 = JSONL → 目标后端批量写入，导出 = 仓储全量 → JSONL。
+
+### 13.5 记忆生命线接口契约
+
+沿用 A-G 编号体系。组件归属：**Scribe**（对话 → 2a 提取）/ **Librarian**（2c 聚类 deep cycle）/ **Archivist**（F3 会话总结）——v2 仍由 harness 进程内编排，不拆独立进程（延续 §12.2 立场，组件化为 v3 演进）。
+
+#### D1 `append_2a_entry(entry, backend)`
+
+- **调用时机**：Scribe 每轮响应后提取
+- **entry**：`{content ≤80字, type: enum, entities, channel, timestamp, source_conversation}`
+- **错误处理**：content 超长或 type 不识别 → 拒绝；写后进入 F4 衰减范围
+- **事务**：单条即事务
+
+#### D2 `append_2a_batch(entries, backend)`
+
+- **调用时机**：F3 会话总结批量写入 / Scribe 攒批
+- **事务语义**：整批单事务，部分失败整批回滚（与 F4 相反：写入保原子，衰减保失败隔离）
+
+#### F3 `persist_session_summary(session_id, backend)`
+
+- **调用时机**：会话正常结束显式触发（v1 由 F1 兜底）
+- **流程**：会话窗口内 2a 轨迹 → 摘要 → 三路落点：① 2a episode 条目（经 D2）② 2b 实体画像更新（经 D9 字段分流）③ `content/` markdown 投影
+- **顺带定稿 v1.1 遗留问题 4（2b vs 2d 边界）**：会话级事实与画像 → 2b；人格自指的变化 → 2d。F3 只产 2a/2b，永不产 2d。
+
+#### 2c 聚类 deep cycle（Librarian → `PatternRepo.upsert_from_cluster`）
+
+- **调用时机**：每 N 次 F1（默认 N=6，约 120 轮）或人工触发
+- **流程**：cooling 期 2a → 模式候选聚类（LLM 完成）→ 与既有 pattern 语义比对 → 命中则 confidence 只增 + evidence_count 累计（UNIQUE 约束去重）；未命中新建，confidence 初始 0.3
+- **约束**：confidence 只增不减（§7.3 原则不变）；仓储只收聚类结果
+
+#### 2d → Layer 1 演化应用（overlay.yaml）
+
+- **机制**：新增 `persona.overlay.yaml` 覆盖层——机写、只允许改 Layer 1 表达字段；启动时 persona.yaml + overlay.yaml 合成生效（persona.yaml 本体不动）
+- **与 2d 的关系**：2d 记「我变了 X 因为 Y」，overlay 记「具体改成什么」；两者写入同源（D6 自评流程扩展），账本可审计、覆盖层可回滚（`reversible` 字段对接 overlay 条目）
+- **硬约束**：overlay 触碰 Layer 0 字段 → harness 拒绝加载；manifest 哈希不覆盖 overlay → 改表达不影响「同一个人格」校验
+- **加载接口**：A11 `load_persona_overlay`（可选——无 overlay 时行为与 v1 完全一致）
+
+#### 语义召回（sqlite-vec 路径）
+
+- `InteractionRepo.find_similar(query_vector, top_k)`：向量索引查询；D1/D2 写入时经 EmbeddingProvider 生成向量同步入索引，`vector_indexed` 置 1——v1 schema 的预留字段转为真实状态机
+- **C1 扩展双路召回**：entities 精确命中（现有）∪ find_similar 语义命中（backend 支持时启用）
+- **C5 联动**：语义单路命中 → cautious；仅语义命中且无实体/时间锚 → associate-only（三档判定规则扩展）
+- **F4 对齐**：30-90 天向量删除阶段 → 删向量索引行，与现有 vector_indexed 状态机一致
+
+#### MCP 映射原则
+
+**不加第 6 工具**：D1/D2/F3/2c 聚类挂 `persona_layer2_query` 新 operation；A11 / overlay 状态挂 `persona_layer0_get` / `persona_runtime_op` 新 operation。对 LLM 可见面保持 5 工具不变。
+
+### 13.6 实施里程碑与验收
+
+| 里程碑 | 内容 | 验收 |
+|---|---|---|
+| M1 存储契约 | StorageBackend 契约 + SQLiteAdapter 重构（15 函数去 conn 化） | 现有 210 用例全过（行为不变）+ 契约接口单测 |
+| M2 写侧闭环 | D1/D2 + Scribe（规则提取起步）+ F3 | canned 对话 → 2a 增长 → F3 后 2b/投影更新 |
+| M3 语义召回 | EmbeddingProvider + sqlite-vec + C1 双路 | 语义命中用例 + C5 三档联动用例 |
+| M4 演化应用 | 2c 聚类 + overlay + A11 | 2d 记录 → overlay 生成 → 重启后表达变化 + Layer 0 拒改校验 |
+| M5 验收 | MCP 冒烟 + 记忆增长闭环 | 见下 |
+
+**E2E 策略变更（2026-10-01，用户决策）**：完整 6 阶段 opencode + 真 LLM 验收（PRD §18）延后至产品成型阶段（届时需先建基准与实例）。v1/v2 当前验收线降为：① MCP server 正常启动、5 工具全部可调用；② canned 模式记忆增长闭环（对话 → 2a 写入 → 召回 → F3 → 2b/投影 → 2c/overlay）。PRD §18 模板保留待产品成型后启用。
+
+**v1.1 搁置问题分级**：
+
+| 问题 | 处置 |
+|---|---|
+| 4（2b vs 2d 边界） | 随 F3 契约定稿（§13.5） |
+| 3（阶段⑥ E1 未跑）/ 6（反推时间戳） | M2 一并处理 |
+| 7 / 8 / 9（评分口径 / 自评偏差 / 模型 ID） | 属 E2E 基准，随产品成型阶段处理 |
+| 10（system_prompt 与 yaml 重复） | M1 重构时评估 |
+| 11（测试覆盖盲区） | M1 重构时自然收敛 |
