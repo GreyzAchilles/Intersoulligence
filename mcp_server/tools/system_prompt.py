@@ -3,7 +3,7 @@
 返回人格模块强制组装的完整 system_prompt（问题 1）。
 work agent 启动时调用，不再在 opencode 配置里写死人格声明。
 
-来源：Debug_v1_1 问题 1（harness 提升为 prompt 强制组装器）
+来源：PRD §16 问题 1（v1.1 debug：harness 提升为 prompt 强制组装器）
 """
 
 from __future__ import annotations
