@@ -100,100 +100,100 @@ def test_layer1_invalid_field_rejected(tmp_config):
 # ---------------------------------------------------------------------------
 # tools.layer2 — persona_layer2_query（7 个 operations）
 # ---------------------------------------------------------------------------
-def test_layer2_invalid_operation_rejected(conn):
+def test_layer2_invalid_operation_rejected(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
-    result = persona_layer2_query("nope", conn)
+    result = persona_layer2_query("nope", backend)
     assert "error" in result
     assert "recall_2a" in result["valid"]
 
 
-def test_layer2_recall_2a_with_entities(conn):
+def test_layer2_recall_2a_with_entities(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     insert_interaction(conn, entities=["豆包"], content="用户聊到豆包")
     result = persona_layer2_query(
-        "recall_2a", conn, {"entities": ["豆包"], "time_range": {}}
+        "recall_2a", backend, {"entities": ["豆包"], "time_range": {}}
     )
     assert len(result["records"]) == 1
     assert "豆包" in result["records"][0]["entities"]
 
 
-def test_layer2_recall_2b_missing_param_returns_error(conn):
+def test_layer2_recall_2b_missing_param_returns_error(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
-    result = persona_layer2_query("recall_2b", conn, {})
+    result = persona_layer2_query("recall_2b", backend, {})
     assert "KeyError" in result["error"]
     assert result["operation"] == "recall_2b"
 
 
-def test_layer2_recall_2c_default_all(conn):
+def test_layer2_recall_2c_default_all(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     insert_pattern(conn, pattern="偏好递进追问")
-    result = persona_layer2_query("recall_2c", conn)
+    result = persona_layer2_query("recall_2c", backend)
     assert len(result["records"]) == 1
 
 
-def test_layer2_recall_2d_recent_n(conn):
+def test_layer2_recall_2d_recent_n(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     insert_ledger(conn, change="c1", timestamp="2026-08-13T10:00:00")
     insert_ledger(conn, change="c2", timestamp="2026-08-14T10:00:00")
-    result = persona_layer2_query("recall_2d", conn, {"recent": 1})
+    result = persona_layer2_query("recall_2d", backend, {"recent": 1})
     assert result["records"][0]["change"] == "c2"
 
 
-def test_layer2_append_2d_writes_ledger(conn):
+def test_layer2_append_2d_writes_ledger(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     result = persona_layer2_query(
         "append_2d",
-        conn,
+        backend,
         {"change": "更克制", "reason": "用户反馈", "affected_layer": "Layer 1"},
     )
     assert "id" in result["appended"]
 
 
-def test_layer2_append_2d_protected_layer_conflict(conn):
+def test_layer2_append_2d_protected_layer_conflict(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     result = persona_layer2_query(
         "append_2d",
-        conn,
+        backend,
         {"change": "x", "reason": "y", "affected_layer": "Layer 0.2"},
     )
     assert result.get("refused") is True
 
 
-def test_layer2_maybe_2d_trigger_user_feedback(conn):
+def test_layer2_maybe_2d_trigger_user_feedback(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     result = persona_layer2_query(
         "maybe_2d_trigger",
-        conn,
+        backend,
         {"input": {"user_message": "辛苦了这次", "ai_response": "好的", "turn": 1}},
     )
     assert result["trigger"]["triggered"] is True
     assert result["trigger"]["reason"] == "user_feedback"
 
 
-def test_layer2_write_2b_overwrite_facts(conn):
+def test_layer2_write_2b_overwrite_facts(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     result = persona_layer2_query(
         "write_2b",
-        conn,
+        backend,
         {"entity": "新实体", "field": "facts", "value": "工科生", "mode": "overwrite"},
     )
     assert result["written"]["entity"] == "新实体"
 
 
-def test_layer2_value_error_caught(conn):
+def test_layer2_value_error_caught(conn, backend):
     from mcp_server.tools import persona_layer2_query
 
     result = persona_layer2_query(
-        "append_2d", conn, {"change": "", "reason": "y", "affected_layer": "Layer 1"}
+        "append_2d", backend, {"change": "", "reason": "y", "affected_layer": "Layer 1"}
     )
     assert "ValueError" in result["error"]
 
@@ -205,11 +205,11 @@ B1_RESP = "[STAGE_TRANSITION]\nto: plan_subagent\nconfidence: high\n[/STAGE_TRAN
 B2_RESP = "[SCENARIO_CHECK] stay: chatbot_mode\n[RESPONSE]好的"
 
 
-def _op(operation, config, params=None, conn=None, available_scenarios=None):
+def _op(operation, config, params=None, backend=None, available_scenarios=None):
     from mcp_server.tools import persona_runtime_op
 
     return persona_runtime_op(
-        operation, config, params, conn=conn, available_scenarios=available_scenarios
+        operation, config, params, backend=backend, available_scenarios=available_scenarios
     )
 
 
@@ -309,19 +309,19 @@ def test_runtime_value_self_check_clean(tmp_config):
     assert result["check"]["action"] == "pass"
 
 
-def test_runtime_take_snapshot(tmp_config, conn):
-    result = _op("take_snapshot", tmp_config, {"turn": 20}, conn=conn)
+def test_runtime_take_snapshot(tmp_config, conn, backend):
+    result = _op("take_snapshot", tmp_config, {"turn": 20}, backend=backend)
     assert result["snapshot"]["turn"] == 20
 
 
-def test_runtime_load_latest_snapshot_fresh_start(tmp_config):
-    result = _op("load_latest_snapshot", tmp_config)
+def test_runtime_load_latest_snapshot_fresh_start(tmp_config, backend):
+    result = _op("load_latest_snapshot", tmp_config, backend=backend)
     assert result["loaded"]["recovery_action"] == "fresh_start"
 
 
-def test_runtime_apply_decay_empty_db(tmp_config, conn):
+def test_runtime_apply_decay_empty_db(tmp_config, conn, backend):
     now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    result = _op("apply_decay", tmp_config, {"now": now}, conn=conn)
+    result = _op("apply_decay", tmp_config, {"now": now}, backend=backend)
     assert result["layer_2a"]["cooling"] == []
     assert result["layer_2d"]["ttl_expired"] == []
 
@@ -551,8 +551,8 @@ def srv(tmp_config, monkeypatch):
     monkeypatch.setattr(srv_mod, "create_harness", tracking_create)
     yield srv_mod
     for h in created:
-        if getattr(h, "conn", None) is not None:
-            h.conn.close()
+        if getattr(h, "backend", None) is not None:
+            h.backend.close()
     schema_loader.reset_cache()
 
 

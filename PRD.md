@@ -75,15 +75,20 @@ intersoulligence/
 ├── persona_runtime/                        # 人格模块核心代码
 │   ├── __init__.py
 │   ├── config.py                           # 配置加载（数据目录 / schema 路径）
-│   ├── db.py                               # SQLite 连接 + 初始化 schema
+│   ├── storage/                            # 存储抽象（v2 M1，ADR-2）
+│   │   ├── base.py                         # StorageBackend 端口契约 + EmbeddingProvider 接口
+│   │   ├── sqlite_adapter.py               # SQLite 参考实现（4 张表 + 衰减字段 + 索引 + WAL）
+│   │   ├── file_snapshot.py                # SnapshotStore JSON 文件实现（F1/F2 转正）
+│   │   └── __init__.py
+│   ├── db.py                               # 兼容 shim（实现已移至 storage.sqlite_adapter）
 │   ├── schema_loader.py                    # A1-A4, A6-A9
 │   ├── signal_parser.py                    # B1-B4
-│   ├── memory_recall.py                     # C1-C6（召回 + 后处理）
-│   ├── memory_write.py                      # D6-D9（写入 + 校验 + 2b 字段管理）
+│   ├── memory_recall.py                     # C1-C6（召回编排 + 后处理；SQL 已下沉 storage）
+│   ├── memory_write.py                      # D6-D9（写入策略 + 校验；SQL 已下沉 storage）
 │   ├── self_check.py                       # E1
-│   ├── persistence.py                      # F1, F2
+│   ├── persistence.py                      # F1, F2, F4（编排；文件 IO / 日期算术已下沉）
 │   ├── scheduler.py                        # G1, G4
-│   └── harness.py                          # C5+C6 强制约束点
+│   └── harness.py                          # C5+C6 强制约束点（持有 StorageBackend）
 ├── mcp_server/                             # MCP server
 │   ├── __init__.py
 │   ├── server.py                           # MCP 入口
@@ -97,7 +102,7 @@ intersoulligence/
 ├── data/
 │   └── persona_schema.yaml                 # Layer 0/1 声明（YAML）
 ├── tests/                                  # 单元测试
-│   ├── conftest.py                         # pytest fixture
+│   ├── conftest.py                         # pytest fixture（backend / conn / harness / insert_* 白盒种子）
 │   ├── test_schema_loader.py
 │   ├── test_signal_parser.py
 │   ├── test_memory_recall.py                # C1-C6
@@ -107,6 +112,7 @@ intersoulligence/
 │   ├── test_scheduler.py
 │   ├── test_harness.py                     # C5+C6 约束测试
 │   ├── test_critical_path.py               # 12 步闭环
+│   ├── test_storage.py                     # v2 M1：StorageBackend 契约单测（20 用例）
 │   └── test_mcp_server.py                  # MCP 5 工具
 └── demo/                                   # demo work agent
     ├── run.py                              # demo 入口
@@ -446,6 +452,7 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-10-01：**文档整合**。架构设计知识收敛至 `ARCHITECTURE.md`；本文档吸收原 `docs/FEATURES.md`（→ §15）、`docs/Debug_v1_1.md`（→ §16）、`docs/CHANGELOG.md`（→ §17）、`docs/TEST_LOG.md`（→ §18）；原 §6 流程图迁移至 ARCHITECTURE §10.3。文档总数 7 → 3（README / ARCHITECTURE / PRD）。
 - 2026-10-01：**接口计数勘误 25 → 28**。Wiki `接口-v1-按工程分类.md` 汇总表「42 → 25」为算术错误——其各类保留数 8 + 4 + 6 + 4 + 1 + 3 + 2 + 0 = 28，与逐接口枚举一致；§1 公式「B8 / C10」笔误同步修正为「B4 / C6」。历史条目中的「25 个」保留原文不改，仅改活文档。
 - 2026-10-01：**v2 设计定稿**（`ARCHITECTURE.md` §13 新增，本文档 §3.3 / §15 / §18 同步）。五项决策：① v2 主题 = 记忆生命线（写侧缺口：2a/2c 零运行时写入、2d 无应用），H1/H2 等顺延 v3；② ADR-1 语言策略——Python 编排层不换，计算下沉引擎，profiling 门槛先行；③ ADR-2 存储抽象 StorageBackend 可插拔（**supersede v1「SQLite 单实例不走 Postgres」**），SQLite 参考实现 + sqlite-vec 向量后端；④ ADR-3 persona bundle 规范（四角色格式拆分、目录常态 + .isoul 传输态、manifest Layer 0 哈希、DB 为源 markdown 为投影）；⑤ **E2E 策略变更**——完整 6 阶段真 LLM 验收延后至产品成型，当前验收线 = MCP 冒烟 + canned 记忆增长闭环。v1.1 搁置问题 4（2b vs 2d 边界）随 F3 契约定稿，其余分级处置（§13.6）。
+- 2026-10-01：**v2 M1 存储契约实施完成**（ARCHITECTURE §13.3 / §13.6 M1）。新增 `persona_runtime/storage/`（base.py 端口契约 + EmbeddingProvider 接口 / sqlite_adapter.py 参考实现 / file_snapshot.py 快照存储）；`db.py` 转兼容 shim；C1-C4 / D6 / D9 / F1 / F2 / F4 及 harness / mcp_server / demo 全部由 `conn: sqlite3.Connection` 改挂 `backend: StorageBackend`（生产侧 15 函数去 conn 化）。4 处方言移植点按 ADR-2 消除：时间戳 Python 侧生成（DDL 去 datetime('now') 默认值）、F4 日期算术改 Python 阈值计算（`_compute_2a_transitions`，阶段粒度失败隔离语义保持）、实体匹配收敛为语义方法 find_by_entities（LIKE 不再越过适配器边界）、行协议统一 dict + LIMIT 参数化。测试：conftest 增 `backend` fixture（conn 降为白盒断言层）、FlakyConn 改写为仓储级 FlakyLedger、新增 test_storage.py 契约单测 20 用例。**验收：230 用例全过（210 基线行为不变 + 20 新增）、覆盖率 93% 持平、demo 12/12 PASS、MCP 冒烟 5 工具全过**。
 
 ## 15. 功能追踪（原 docs/FEATURES.md）
 
@@ -539,11 +546,11 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - [x] ADR-3 persona bundle 规范（四角色格式 + manifest Layer 0 哈希 + JSONL 交换 + markdown 投影）
 - [x] E2E 策略变更（完整真 LLM 验收延后至产品成型）
 
-#### M1 存储契约
-- [ ] StorageBackend Port/Adapter 契约（InteractionRepo / EntityRepo / PatternRepo / LedgerRepo / SnapshotStore）
-- [ ] SQLiteAdapter 重构（约 15 个生产函数去 conn 化 + 4 处方言移植点消除）
-- [ ] 测试迁移（约 25 个改动点：conftest 4 个 INSERT helper + 13 处 SELECT 断言 + FlakyConn 重写）
-- [ ] EmbeddingProvider 接口定义
+#### M1 存储契约（✅ 2026-10-01 实施完成）
+- [x] StorageBackend Port/Adapter 契约（`persona_runtime/storage/base.py`：InteractionRepo / EntityRepo / PatternRepo / LedgerRepo / SnapshotStore + EmbeddingProvider 接口 + StorageNotSupported）
+- [x] SQLiteAdapter 重构（`storage/sqlite_adapter.py`：15 个生产函数去 conn 化 + 4 处方言移植点消除——datetime('now') 默认值改 Python 生成、F4 日期算术改 Python 阈值计算、实体匹配语义方法化 find_by_entities、行协议统一 dict / LIMIT 参数化；`db.py` 转兼容 shim）
+- [x] 测试迁移（conftest `backend` fixture / conn 降为白盒层；FlakyConn → FlakyLedger 仓储级拦截；生产 harness / mcp / demo 全部挂 backend）+ 新增 `tests/test_storage.py` 契约单测 20 用例
+- [x] EmbeddingProvider 接口定义（M3 落地本地小模型实现）
 
 #### M2 写侧闭环
 - [ ] D1 `append_2a_entry` + D2 `append_2a_batch`

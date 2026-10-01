@@ -91,7 +91,7 @@ def _build_server() -> Any:
             params: 各 operation 不同。
         """
         h = _ensure_harness(_STATE)
-        return persona_layer2_query(operation, h.conn, params)
+        return persona_layer2_query(operation, h.backend, params)
 
     @mcp.tool()
     def persona_runtime_op_tool(
@@ -121,7 +121,7 @@ def _build_server() -> Any:
             operation,
             h.config,
             op_params,
-            conn=h.conn,
+            backend=h.backend,
             available_scenarios=avail,
         )
         # 结构化输出（问题 2）：emit_* 校验通过后同步 live harness 状态

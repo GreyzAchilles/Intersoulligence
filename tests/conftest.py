@@ -1,6 +1,9 @@
 """tests/conftest.py — pytest 共享 fixture
 
 每个测试用临时 schema + 临时 SQLite，相互隔离。
+
+v2 M1：backend fixture（StorageBackend，ADR-2）；conn 为其底层连接，
+仅用于白盒断言与种子数据（insert_* helper 直写 SQL 属测试专用白盒层）。
 """
 
 from __future__ import annotations
@@ -16,7 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from persona_runtime import schema_loader
 from persona_runtime.config import Config, load_config
-from persona_runtime.db import connect, init_schema
+from persona_runtime.storage import SQLiteStorage
 
 
 REPO_DATA = Path(__file__).resolve().parent.parent / "data" / "persona_schema.yaml"
@@ -40,12 +43,17 @@ def tmp_config(tmp_path: Path) -> Config:
 
 
 @pytest.fixture
-def conn(tmp_config: Config) -> sqlite3.Connection:
-    """已初始化 schema 的 SQLite 连接。"""
-    c = connect(tmp_config.db_path)
-    init_schema(c)
-    yield c
-    c.close()
+def backend(tmp_config: Config) -> SQLiteStorage:
+    """已初始化 schema 的 StorageBackend（SQLite 参考实现）。"""
+    b = SQLiteStorage.from_config(tmp_config)
+    yield b
+    b.close()
+
+
+@pytest.fixture
+def conn(backend: SQLiteStorage) -> sqlite3.Connection:
+    """backend 底层连接（白盒断言 / 种子数据用，不下发到业务代码）。"""
+    yield backend.conn
 
 
 @pytest.fixture
@@ -57,8 +65,8 @@ def harness(tmp_config: Config):
     h.init()
     schema_loader.reset_cache()
     yield h
-    if h.conn is not None:
-        h.conn.close()
+    if h.backend is not None:
+        h.backend.close()
 
 
 def insert_interaction(
@@ -76,7 +84,7 @@ def insert_interaction(
 
     cur = conn.execute(
         "INSERT INTO interaction_memory (content, type, source_conv, timestamp, entities, channel, "
-        "status, last_accessed, vector_indexed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "status, last_accessed, vector_indexed, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             content,
             typ,
@@ -87,6 +95,7 @@ def insert_interaction(
             status,
             last_accessed or timestamp,
             vector_indexed,
+            last_accessed or timestamp,
         ),
     )
     conn.commit()
@@ -102,9 +111,9 @@ def insert_ledger(
     reversible: int = 1,
 ) -> int:
     cur = conn.execute(
-        "INSERT INTO self_growth_ledger (change, reason, affected_layer, timestamp, reversible) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (change, reason, affected_layer, timestamp, reversible),
+        "INSERT INTO self_growth_ledger (change, reason, affected_layer, timestamp, reversible, created_at) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        (change, reason, affected_layer, timestamp, reversible, timestamp),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -120,8 +129,8 @@ def insert_pattern(
 ) -> int:
     cur = conn.execute(
         "INSERT INTO long_term_patterns (pattern, confidence, first_observed, last_accessed, "
-        "evidence_count) VALUES (?, ?, ?, ?, ?)",
-        (pattern, confidence, first_observed, last_accessed, evidence_count),
+        "evidence_count, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (pattern, confidence, first_observed, last_accessed, evidence_count, first_observed),
     )
     conn.commit()
     return int(cur.lastrowid)
@@ -137,13 +146,14 @@ def insert_entity(
     import json
 
     conn.execute(
-        "INSERT INTO entity_profile (entity, facts, current_status, judgment) "
-        "VALUES (?, ?, ?, ?)",
+        "INSERT INTO entity_profile (entity, facts, current_status, judgment, updated_at) "
+        "VALUES (?, ?, ?, ?, ?)",
         (
             entity,
             json.dumps(facts or [], ensure_ascii=False),
             json.dumps(current_status or [], ensure_ascii=False),
             json.dumps(judgment or [], ensure_ascii=False),
+            "2026-08-14T10:00:00",
         ),
     )
     conn.commit()

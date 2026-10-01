@@ -11,6 +11,7 @@
 - **Layer 1 EXPRESSION**（半稳定）：语气 / 口头禅 / 称呼 / 蛐蛐 / 转场白语
 - **Layer 2 MEMORY**（MUTABLE）：2a 互动事实 / 2b 实体画像 / 2c 长期行为模式 / 2d 自我更新账本
 - **harness**：三环节（grill / plan / build）的主循环协调 + C5/C6 强制约束点
+- **StorageBackend**（v2）：可插拔存储抽象——SQLite 参考实现，向量后端（sqlite-vec）与关系型后端按同一契约接入
 - **MCP server**：5 个工具暴露给 work agent
 
 ## 文档导航（2026-10-01 整合后共 3 份）
@@ -44,10 +45,10 @@ uv run intersoulligence-server
 ```
 intersoulligence/
 ├── README.md / ARCHITECTURE.md / PRD.md   # 三份整合文档
-├── persona_runtime/        # 人格模块核心（config / db / schema_loader / signal_parser / memory_recall / memory_write / self_check / persistence / scheduler / harness）
+├── persona_runtime/        # 人格模块核心（config / storage 存储抽象 / schema_loader / signal_parser / memory_recall / memory_write / self_check / persistence / scheduler / harness）
 ├── mcp_server/             # MCP server（5 工具）
 ├── data/                   # persona_schema.yaml 声明 + SQLite db + 快照
-├── tests/                  # pytest（关键路径 + 全接口 + MCP 工具）
+├── tests/                  # pytest（关键路径 + 全接口 + 存储契约 + MCP 工具）
 └── demo/                   # demo work agent（run.py + opencode 配置示例）
 ```
 
@@ -89,6 +90,7 @@ v2 新增接口契约（D1/D2 写入、F3 会话总结、2c 聚类、2d→Layer 
 - ✅ demo 12/12 PASS（canned response 模式）
 - ✅ 文档整合：7 份 → 3 份（README / ARCHITECTURE / PRD）
 - ✅ **v2 设计定稿（2026-10-01）**：记忆生命线 + 存储抽象 + persona bundle，见 `ARCHITECTURE.md` §13
+- ✅ **v2 M1 存储契约实施（2026-10-01）**：`persona_runtime/storage/`（StorageBackend 契约 + SQLite 参考实现 + FileSnapshotStore）+ 4 处方言移植点消除；230 用例全过、覆盖率 93%、demo 12/12 PASS、MCP 冒烟全过（ARCHITECTURE §13.3 / PRD §15 M1）
 - ⬜ v1 遗留处置：完整 6 阶段 opencode + 真 LLM 端到端验收**延后至产品成型**（策略变更，模板保留于 `PRD.md` §18）；当前验收线 = MCP server 冒烟 + canned 记忆增长闭环（v2 §13.6）
 
 ### 关键决策日志

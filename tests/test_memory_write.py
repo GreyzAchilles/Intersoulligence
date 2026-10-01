@@ -16,9 +16,9 @@ from tests.conftest import insert_entity, insert_interaction
 # ---------------------------------------------------------------------------
 # D6 append_2d_entry
 # ---------------------------------------------------------------------------
-def test_D6_append_writes_row(conn):
+def test_D6_append_writes_row(conn, backend):
     result = memory_write.D6_append_2d_entry(
-        conn, "语气更克制", "用户反馈我话太多", "Layer 1"
+        backend, "语气更克制", "用户反馈我话太多", "Layer 1"
     )
     assert "appended" in result
     assert "id" in result["appended"]
@@ -31,20 +31,20 @@ def test_D6_append_writes_row(conn):
 
 def test_D6_missing_required_refused():
     with pytest.raises(ValueError):
-        memory_write.D6_append_2d_entry(conn=None, change="", reason="x", affected_layer="Layer 1")
+        memory_write.D6_append_2d_entry(backend=None, change="", reason="x", affected_layer="Layer 1")
 
 
 def test_D6_protected_layer_refused():
     result = memory_write.D6_append_2d_entry(
-        conn=None, change="x", reason="y", affected_layer="Layer 0.2"
+        backend=None, change="x", reason="y", affected_layer="Layer 0.2"
     )
     assert result.get("refused") is True
     assert result["conflict_clauses"][0]["layer"] == "Layer 0"
 
 
-def test_D6_strips_user_judgment_content(conn, recwarn):
+def test_D6_strips_user_judgment_content(conn, backend, recwarn):
     result = memory_write.D6_append_2d_entry(
-        conn, "他喜欢甜食", "用户反馈", "Layer 1"
+        backend, "他喜欢甜食", "用户反馈", "Layer 1"
     )
     row = conn.execute(
         "SELECT change FROM self_growth_ledger WHERE id = ?",
@@ -54,9 +54,9 @@ def test_D6_strips_user_judgment_content(conn, recwarn):
     assert "他喜欢" not in row["change"]
 
 
-def test_D6_explicit_timestamp_used(conn):
+def test_D6_explicit_timestamp_used(conn, backend):
     result = memory_write.D6_append_2d_entry(
-        conn, "x", "y", "Layer 1", timestamp="2026-01-01T00:00:00"
+        backend, "x", "y", "Layer 1", timestamp="2026-01-01T00:00:00"
     )
     assert result["appended"]["timestamp"] == "2026-01-01T00:00:00"
 
@@ -156,9 +156,9 @@ def test_D8_missing_required():
 # ---------------------------------------------------------------------------
 # D9 write_2b_entry (Layer 2b 字段分流核心)
 # ---------------------------------------------------------------------------
-def test_D9_overwrite_facts_creates_profile_if_missing(conn):
+def test_D9_overwrite_facts_creates_profile_if_missing(conn, backend):
     result = memory_write.D9_write_2b_entry(
-        conn, "新实体", "facts", "工科生", "overwrite"
+        backend, "新实体", "facts", "工科生", "overwrite"
     )
     assert result["written"]["entity"] == "新实体"
     row = conn.execute(
@@ -167,17 +167,17 @@ def test_D9_overwrite_facts_creates_profile_if_missing(conn):
     assert json.loads(row["facts"]) == ["工科生"]
 
 
-def test_D9_facts_requires_overwrite(conn):
+def test_D9_facts_requires_overwrite(conn, backend):
     with pytest.raises(ValueError):
-        memory_write.D9_write_2b_entry(conn, "用户", "facts", "x", "append")
+        memory_write.D9_write_2b_entry(backend, "用户", "facts", "x", "append")
 
 
-def test_D9_current_status_covering_update_replaces_old(conn):
+def test_D9_current_status_covering_update_replaces_old(conn, backend):
     insert_entity(conn, entity="用户", current_status=[
         {"content": "旧", "timestamp": "2026-08-01T10:00:00"}
     ])
     memory_write.D9_write_2b_entry(
-        conn, "用户", "current_status", {"content": "新", "timestamp": "2026-08-14T10:00:00"},
+        backend, "用户", "current_status", {"content": "新", "timestamp": "2026-08-14T10:00:00"},
         "covering_update",
     )
     row = conn.execute(
@@ -188,12 +188,12 @@ def test_D9_current_status_covering_update_replaces_old(conn):
     assert statuses[0]["content"] == "新"
 
 
-def test_D9_judgment_append_keeps_history(conn):
+def test_D9_judgment_append_keeps_history(conn, backend):
     insert_entity(conn, entity="用户", judgment=[
         {"content": "old impression", "timestamp": "2026-08-01T10:00:00"}
     ])
     memory_write.D9_write_2b_entry(
-        conn, "用户", "judgment", {"content": "new impression", "timestamp": "2026-08-14T10:00:00"},
+        backend, "用户", "judgment", {"content": "new impression", "timestamp": "2026-08-14T10:00:00"},
         "append",
     )
     row = conn.execute(
@@ -205,16 +205,16 @@ def test_D9_judgment_append_keeps_history(conn):
     assert judgments[1]["content"] == "new impression"
 
 
-def test_D9_judgment_requires_append(conn):
+def test_D9_judgment_requires_append(conn, backend):
     with pytest.raises(ValueError):
-        memory_write.D9_write_2b_entry(conn, "x", "judgment", "y", "overwrite")
+        memory_write.D9_write_2b_entry(backend, "x", "judgment", "y", "overwrite")
 
 
-def test_D9_unknown_field_refused(conn):
+def test_D9_unknown_field_refused(conn, backend):
     with pytest.raises(ValueError):
-        memory_write.D9_write_2b_entry(conn, "x", "nope", "y", "overwrite")
+        memory_write.D9_write_2b_entry(backend, "x", "nope", "y", "overwrite")
 
 
-def test_D9_unknown_mode_refused(conn):
+def test_D9_unknown_mode_refused(conn, backend):
     with pytest.raises(ValueError):
-        memory_write.D9_write_2b_entry(conn, "x", "facts", "y", "wrong_mode")
+        memory_write.D9_write_2b_entry(backend, "x", "facts", "y", "wrong_mode")

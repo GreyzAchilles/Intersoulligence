@@ -40,8 +40,8 @@ def critical_harness(tmp_path_factory):
     schema_loader.reset_cache()
     h.init()
     yield h
-    if h.conn is not None:
-        h.conn.close()
+    if h.backend is not None:
+        h.backend.close()
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def test_step_01_startup_loading(tmp_config, harness):
 
 def test_step_02_snapshot_load_fresh(tmp_config, harness):
     """2. 快照加载 — 无快照 → fresh_start。"""
-    out = persistence.F2_load_latest_snapshot(tmp_config)
+    out = persistence.F2_load_latest_snapshot(harness.backend)
     assert out["loaded"]["recovery_action"] == "fresh_start"
     assert harness.init()["recovery"] == "fresh_start"
 
@@ -131,15 +131,15 @@ confidence: high
 # ---------------------------------------------------------------------------
 def test_step_07_recall_per_layer(harness):
     """7. 召回原始数据 — C1/C2/C3/C4 召回（按层分流）。"""
-    insert_interaction(harness.conn, entities=["豆包"], content="提到豆包")
-    insert_entity(harness.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
-    insert_pattern(harness.conn, pattern="enjoys 递进追问")
-    insert_ledger(harness.conn, change="变得更直接", reason="用户反馈")
+    insert_interaction(harness.backend.conn, entities=["豆包"], content="提到豆包")
+    insert_entity(harness.backend.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
+    insert_pattern(harness.backend.conn, pattern="enjoys 递进追问")
+    insert_ledger(harness.backend.conn, change="变得更直接", reason="用户反馈")
 
-    assert memory_recall.C1_recall_2a(["豆包"], {}, harness.conn)["records"]
-    assert memory_recall.C2_recall_2b("用户", harness.conn)["profile"]["facts"]
-    assert memory_recall.C3_recall_2c(["递进追问"], harness.conn)["records"]
-    assert memory_recall.C4_recall_2d(10, harness.conn)["records"]
+    assert memory_recall.C1_recall_2a(["豆包"], {}, harness.backend)["records"]
+    assert memory_recall.C2_recall_2b("用户", harness.backend)["profile"]["facts"]
+    assert memory_recall.C3_recall_2c(["递进追问"], harness.backend)["records"]
+    assert memory_recall.C4_recall_2d(10, harness.backend)["records"]
 
 
 def test_step_08_recall_postprocessing(harness):
@@ -147,8 +147,8 @@ def test_step_08_recall_postprocessing(harness):
     # timestamp 种入当前时间：C5 的 <30 天 cite 档依赖记录年龄（timestamp 优先于
     # last_accessed 参与 age 计算），固定日期会让本测试随真实时间流逝而失效
     fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-    insert_interaction(harness.conn, entities=["x"], content="测试", channel="direct", timestamp=fresh_ts)
-    recalled = memory_recall.C1_recall_2a(["x"], {}, harness.conn)
+    insert_interaction(harness.backend.conn, entities=["x"], content="测试", channel="direct", timestamp=fresh_ts)
+    recalled = memory_recall.C1_recall_2a(["x"], {}, harness.backend)
     tagged = memory_recall.C5_apply_recall_permission(recalled["records"])
     assert tagged["tagged_records"][0]["permission"] == "cite"
     rewritten = memory_recall.C6_rewrite_voice(tagged["tagged_records"], "2a")
@@ -165,7 +165,7 @@ def test_step_09_self_growth_ledger(harness):
     val = memory_write.D8_validate_2d_entry(suggestion)
     assert val["validated"]["passed"] is True
     write = memory_write.D6_append_2d_entry(
-        harness.conn, suggestion["change"], suggestion["reason"], suggestion["affected_layer"]
+        harness.backend, suggestion["change"], suggestion["reason"], suggestion["affected_layer"]
     )
     assert "appended" in write
 
@@ -173,16 +173,16 @@ def test_step_09_self_growth_ledger(harness):
 def test_step_10_write_2b_field_dispatch(harness):
     """10. 2b 字段写入 — D9 write_2b_entry（按字段分流 facts/current_status/judgment）。"""
     facts_out = memory_write.D9_write_2b_entry(
-        harness.conn, "项目X", "facts", "新事实", "overwrite"
+        harness.backend, "项目X", "facts", "新事实", "overwrite"
     )
     assert facts_out["written"]["mode"] == "overwrite"
     cs_out = memory_write.D9_write_2b_entry(
-        harness.conn, "项目X", "current_status",
+        harness.backend, "项目X", "current_status",
         {"content": "进行中", "timestamp": "2026-08-14T10:00:00"}, "covering_update"
     )
     assert cs_out["written"]["mode"] == "covering_update"
     jd_out = memory_write.D9_write_2b_entry(
-        harness.conn, "项目X", "judgment",
+        harness.backend, "项目X", "judgment",
         {"content": "我的印象", "timestamp": "2026-08-14T10:00:00"}, "append"
     )
     assert jd_out["written"]["mode"] == "append"
@@ -194,11 +194,11 @@ def test_step_10_write_2b_field_dispatch(harness):
 def test_step_11_snapshot_and_decay(tmp_config, harness):
     """11. 快照 + 衰减 — F1 每 20 轮落盘 + F4 apply_decay 跑衰减。"""
     rid = insert_interaction(
-        harness.conn, entities=["x"], content="旧",
+        harness.backend.conn, entities=["x"], content="旧",
         last_accessed="2026-07-25T00:00:00", status="active",
     )
     out = persistence.F1_take_snapshot(
-        20, harness.conn, tmp_config,
+        20, harness.backend, tmp_config,
         current_stage="grill", current_scenario="chatbot_mode",
     )
     snap = out["snapshot"]
@@ -207,7 +207,7 @@ def test_step_11_snapshot_and_decay(tmp_config, harness):
     assert snaps_file_wrote(tmp_config, snap["id"])
 
     # 13 天前的记录 → 进入 cooling（但内容仍保留）
-    row = harness.conn.execute(
+    row = harness.backend.conn.execute(
         "SELECT status, content FROM interaction_memory WHERE id = ?", (rid,)
     ).fetchone()
     assert row["status"] == "cooling"

@@ -20,10 +20,10 @@ def test_harness_constraint_cite(tmp_config, harness):
 
     ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S")
     rid = insert_interaction(
-        harness.conn, entities=["豆包"], content="用户聊到豆包",
+        harness.backend.conn, entities=["豆包"], content="用户聊到豆包",
         timestamp=ts, last_accessed=ts, channel="direct",
     )
-    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.conn)
+    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.backend)
     tagged = memory_recall.C5_apply_recall_permission(recalled["records"])["tagged_records"]
     assert tagged[0]["permission"] == "cite"
     rewritten = memory_recall.C6_rewrite_voice(tagged, "2a")["rewritten"]
@@ -39,10 +39,10 @@ def test_harness_constraint_cautious(tmp_config, harness):
 
     ts = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%S")
     insert_interaction(
-        harness.conn, entities=["豆包"], content="x",
+        harness.backend.conn, entities=["豆包"], content="x",
         timestamp=ts, last_accessed=ts, channel="single",
     )
-    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.conn)
+    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.backend)
     tagged = memory_recall.C5_apply_recall_permission(recalled["records"])["tagged_records"]
     assert tagged[0]["permission"] == "cautious"
 
@@ -55,10 +55,10 @@ def test_harness_constraint_associate_only(tmp_config, harness):
 
     ts = (datetime.now(timezone.utc) - timedelta(days=120)).strftime("%Y-%m-%dT%H:%M:%S")
     insert_interaction(
-        harness.conn, entities=["豆包"], content="旧事",
+        harness.backend.conn, entities=["豆包"], content="旧事",
         timestamp=ts, last_accessed=ts, channel="direct",
     )
-    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.conn)
+    recalled = memory_recall.C1_recall_2a(["豆包"], {}, harness.backend)
     tagged = memory_recall.C5_apply_recall_permission(recalled["records"])["tagged_records"]
     assert tagged[0]["permission"] == "associate-only"
 
@@ -113,7 +113,7 @@ def test_harness_value_check_triggers_regenerate(tmp_config, harness):
 def test_harness_2d_trigger_writes_ledger(tmp_config, harness):
     harness.manual_init_scenario("chatbot_mode")
     harness.process_turn("你辛苦了记住一下", "辛苦")
-    rows = harness.conn.execute(
+    rows = harness.backend.conn.execute(
         "SELECT COUNT(*) AS n FROM self_growth_ledger WHERE deleted_at IS NULL"
     ).fetchone()
     assert rows["n"] >= 1
@@ -134,10 +134,10 @@ def test_harness_inject_recall_combines_layers(tmp_config, harness):
     from tests.conftest import insert_entity, insert_interaction, insert_pattern
 
     insert_interaction(
-        harness.conn, entities=["豆包"], content="聊豆包"
+        harness.backend.conn, entities=["豆包"], content="聊豆包"
     )
-    insert_entity(harness.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
-    insert_pattern(harness.conn, pattern="偏好递进追问")
+    insert_entity(harness.backend.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
+    insert_pattern(harness.backend.conn, pattern="偏好递进追问")
     result = harness.inject_recall(
         entities=["豆包"], entity="用户", patterns=["递进追问"]
     )

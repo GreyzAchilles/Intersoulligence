@@ -15,39 +15,39 @@ from tests.conftest import insert_entity, insert_interaction, insert_pattern
 # ---------------------------------------------------------------------------
 # C1 recall_2a
 # ---------------------------------------------------------------------------
-def test_C1_recall_2a_filters_entities(conn):
+def test_C1_recall_2a_filters_entities(conn, backend):
     insert_interaction(conn, entities=["豆包"], content="用户聊到豆包")
     insert_interaction(conn, entities=["元宝"], content="用户聊到元宝")
-    result = memory_recall.C1_recall_2a(["豆包"], {}, conn)
+    result = memory_recall.C1_recall_2a(["豆包"], {}, backend)
     assert len(result["records"]) == 1
     assert "豆包" in result["records"][0]["entities"]
 
 
-def test_C1_recall_2a_updates_last_accessed(conn):
+def test_C1_recall_2a_updates_last_accessed(conn, backend):
     old_ts = "2026-08-01T10:00:00"
     rid = insert_interaction(conn, entities=["x"], last_accessed=old_ts)
-    memory_recall.C1_recall_2a(["x"], {}, conn)
+    memory_recall.C1_recall_2a(["x"], {}, backend)
     row = conn.execute("SELECT last_accessed FROM interaction_memory WHERE id = ?", (rid,)).fetchone()
     assert row["last_accessed"] != old_ts
 
 
-def test_C1_recall_2a_empty_entities_returns_empty(conn):
+def test_C1_recall_2a_empty_entities_returns_empty(conn, backend):
     insert_interaction(conn, entities=["豆包"])
-    result = memory_recall.C1_recall_2a([], {}, conn)
+    result = memory_recall.C1_recall_2a([], {}, backend)
     assert result["records"] == []
 
 
-def test_C1_recall_2a_skips_content_wiped(conn):
+def test_C1_recall_2a_skips_content_wiped(conn, backend):
     insert_interaction(conn, entities=["x"], status="content_wiped")
-    result = memory_recall.C1_recall_2a(["x"], {}, conn)
+    result = memory_recall.C1_recall_2a(["x"], {}, backend)
     assert len(result["records"]) == 0
 
 
-def test_C1_recall_2a_filters_time_range(conn):
+def test_C1_recall_2a_filters_time_range(conn, backend):
     insert_interaction(conn, entities=["x"], timestamp="2026-07-15T10:00:00")
     insert_interaction(conn, entities=["x"], timestamp="2026-08-14T10:00:00")
     result = memory_recall.C1_recall_2a(
-        ["x"], {"from": "2026-08-01T00:00:00", "to": "2026-08-31T00:00:00"}, conn
+        ["x"], {"from": "2026-08-01T00:00:00", "to": "2026-08-31T00:00:00"}, backend
     )
     assert len(result["records"]) == 1
     assert result["records"][0]["timestamp"] == "2026-08-14T10:00:00"
@@ -56,21 +56,21 @@ def test_C1_recall_2a_filters_time_range(conn):
 # ---------------------------------------------------------------------------
 # C2 recall_2b
 # ---------------------------------------------------------------------------
-def test_C2_recall_2b_returns_existing(conn):
+def test_C2_recall_2b_returns_existing(conn, backend):
     insert_entity(
         conn, entity="用户",
         facts=[{"content": "工科生", "confidence": 0.9}],
         judgment=[{"content": "产品边界感很彻底", "timestamp": "2026-08-14T10:00:00"}],
     )
-    result = memory_recall.C2_recall_2b("用户", conn)
+    result = memory_recall.C2_recall_2b("用户", backend)
     p = result["profile"]
     assert p["entity"] == "用户"
     assert p["facts"][0]["content"] == "工科生"
     assert "产品边界感" in p["judgment"][0]["content"]
 
 
-def test_C2_recall_2b_missing_entity_returns_empty(conn):
-    result = memory_recall.C2_recall_2b("不存在", conn)
+def test_C2_recall_2b_missing_entity_returns_empty(conn, backend):
+    result = memory_recall.C2_recall_2b("不存在", backend)
     assert result["profile"]["entity"] == "不存在"
     assert result["profile"]["facts"] == []
 
@@ -78,25 +78,25 @@ def test_C2_recall_2b_missing_entity_returns_empty(conn):
 # ---------------------------------------------------------------------------
 # C3 recall_2c
 # ---------------------------------------------------------------------------
-def test_C3_recall_2c_with_patterns(conn):
+def test_C3_recall_2c_with_patterns(conn, backend):
     insert_pattern(conn, pattern="用户偏好递进追问")
     insert_pattern(conn, pattern="用户爱闲聊")
-    result = memory_recall.C3_recall_2c(["递进追问"], conn)
+    result = memory_recall.C3_recall_2c(["递进追问"], backend)
     assert len(result["records"]) == 1
     assert "递进追问" in result["records"][0]["pattern"]
 
 
-def test_C3_recall_2c_no_patterns_returns_all(conn):
+def test_C3_recall_2c_no_patterns_returns_all(conn, backend):
     insert_pattern(conn, pattern="foo")
     insert_pattern(conn, pattern="bar")
-    result = memory_recall.C3_recall_2c(None, conn)
+    result = memory_recall.C3_recall_2c(None, backend)
     assert len(result["records"]) == 2
 
 
-def test_C3_recall_2c_updates_last_accessed(conn):
+def test_C3_recall_2c_updates_last_accessed(conn, backend):
     old_ts = "2026-07-29T10:00:00"
     insert_pattern(conn, pattern="x", last_accessed=old_ts)
-    memory_recall.C3_recall_2c(None, conn)
+    memory_recall.C3_recall_2c(None, backend)
     row = conn.execute(
         "SELECT last_accessed FROM long_term_patterns WHERE pattern = 'x'"
     ).fetchone()
@@ -106,30 +106,30 @@ def test_C3_recall_2c_updates_last_accessed(conn):
 # ---------------------------------------------------------------------------
 # C4 recall_2d
 # ---------------------------------------------------------------------------
-def test_C4_recall_2d_recent_n(conn):
+def test_C4_recall_2d_recent_n(conn, backend):
     from tests.conftest import insert_ledger
 
     insert_ledger(conn, change="c1", timestamp="2026-08-13T10:00:00")
     insert_ledger(conn, change="c2", timestamp="2026-08-14T10:00:00")
-    result = memory_recall.C4_recall_2d(1, conn)
+    result = memory_recall.C4_recall_2d(1, backend)
     assert len(result["records"]) == 1
     assert result["records"][0]["change"] == "c2"
 
 
-def test_C4_recall_2d_recent_zero_returns_all(conn):
+def test_C4_recall_2d_recent_zero_returns_all(conn, backend):
     from tests.conftest import insert_ledger
 
     insert_ledger(conn, change="c1")
     insert_ledger(conn, change="c2")
-    result = memory_recall.C4_recall_2d(0, conn)
+    result = memory_recall.C4_recall_2d(0, backend)
     assert len(result["records"]) == 2
 
 
-def test_C4_recall_2d_negative_treated_as_zero(conn, recwarn):
+def test_C4_recall_2d_negative_treated_as_zero(conn, backend, recwarn):
     from tests.conftest import insert_ledger
 
     insert_ledger(conn, change="c1")
-    result = memory_recall.C4_recall_2d(-3, conn)
+    result = memory_recall.C4_recall_2d(-3, backend)
     assert len(result["records"]) == 1
     assert len(recwarn) >= 1
 

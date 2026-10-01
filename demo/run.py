@@ -93,7 +93,7 @@ def main() -> int:
     results.append(("1.启动加载 A1/A2/A3/A4/A6", ok, ""))
 
     # 2. 快照加载（fresh_start）
-    out_snap = persistence.F2_load_latest_snapshot(cfg)
+    out_snap = persistence.F2_load_latest_snapshot(h.backend)
     ok = out_snap["loaded"]["recovery_action"] == "fresh_start"
     results.append(("2.快照加载 F2 (fresh_start)", ok, ""))
 
@@ -129,14 +129,14 @@ def main() -> int:
 
     # ----- Layer 2 闭环 -----
     # 7. 召回（按层）
-    insert_interaction(h.conn, entities=["豆包"], content="提到豆包", last_accessed="2026-08-10T00:00:00")
-    insert_entity(h.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
-    insert_pattern(h.conn, pattern="偏好递进追问")
-    insert_ledger(h.conn, change="语气更直接", reason="用户反馈")
-    c1 = memory_recall.C1_recall_2a(["豆包"], {}, h.conn)
-    c2 = memory_recall.C2_recall_2b("用户", h.conn)
-    c3 = memory_recall.C3_recall_2c(["递进追问"], h.conn)
-    c4 = memory_recall.C4_recall_2d(10, h.conn)
+    insert_interaction(h.backend.conn, entities=["豆包"], content="提到豆包", last_accessed="2026-08-10T00:00:00")
+    insert_entity(h.backend.conn, entity="用户", facts=[{"content": "工科生", "confidence": 0.9}])
+    insert_pattern(h.backend.conn, pattern="偏好递进追问")
+    insert_ledger(h.backend.conn, change="语气更直接", reason="用户反馈")
+    c1 = memory_recall.C1_recall_2a(["豆包"], {}, h.backend)
+    c2 = memory_recall.C2_recall_2b("用户", h.backend)
+    c3 = memory_recall.C3_recall_2c(["递进追问"], h.backend)
+    c4 = memory_recall.C4_recall_2d(10, h.backend)
     ok = c1["records"] and c2["profile"]["facts"] and c3["records"] and c4["records"]
     results.append(("7.召回原始 C1/C2/C3/C4", ok, ""))
 
@@ -155,7 +155,7 @@ def main() -> int:
         suggestion = trig["trigger"]["suggested_entry"]
         val = memory_write.D8_validate_2d_entry(suggestion)
         write = memory_write.D6_append_2d_entry(
-            h.conn, suggestion["change"], suggestion["reason"], suggestion["affected_layer"]
+            h.backend, suggestion["change"], suggestion["reason"], suggestion["affected_layer"]
         )
         ok = val["validated"]["passed"] and "appended" in write
     else:
@@ -164,16 +164,16 @@ def main() -> int:
 
     # 10. 2b 字段写入
     out = memory_write.D9_write_2b_entry(
-        h.conn, "项目X", "facts", "新事实内容", "overwrite"
+        h.backend, "项目X", "facts", "新事实内容", "overwrite"
     )
     ok = out["written"]["mode"] == "overwrite"
     out = memory_write.D9_write_2b_entry(
-        h.conn, "项目X", "current_status",
+        h.backend, "项目X", "current_status",
         {"content": "进行中", "timestamp": "2026-08-14T10:00:00"}, "covering_update"
     )
     ok &= out["written"]["mode"] == "covering_update"
     out = memory_write.D9_write_2b_entry(
-        h.conn, "项目X", "judgment",
+        h.backend, "项目X", "judgment",
         {"content": "印象", "timestamp": "2026-08-14T10:00:00"}, "append"
     )
     ok &= out["written"]["mode"] == "append"
@@ -182,11 +182,11 @@ def main() -> int:
     # ----- 跨层辅佐闭环 -----
     # 11. 快照 + 衰减
     insert_interaction(
-        h.conn, entities=["旧"], content="旧记录",
+        h.backend.conn, entities=["旧"], content="旧记录",
         last_accessed="2026-07-25T00:00:00", status="active",
     )
     snap = persistence.F1_take_snapshot(
-        20, h.conn, cfg,
+        20, h.backend, cfg,
         current_stage=h.current_stage, current_scenario=h.current_scenario,
     )
     snap_path = Path(snap["snapshot"]["path"])

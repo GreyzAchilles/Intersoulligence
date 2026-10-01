@@ -4,7 +4,8 @@
 
 按模块组织：
 - config         配置加载
-- db             SQLite 连接 + schema 初始化
+- storage        存储抽象（v2 ADR-2：StorageBackend 契约 + SQLite 参考实现）
+- db             兼容 shim（实现已移至 storage）
 - schema_loader   A1-A4, A6-A9 加载类接口
 - signal_parser  B1-B4 解析类接口
 - memory_recall  C1-C6 召回类接口
@@ -20,6 +21,7 @@
 from .config import Config, load_config
 from .db import connect, get_connection, init_schema
 from .harness import Harness, create_harness
+from .storage import SQLiteStorage, StorageBackend
 from . import (
     memory_recall,
     memory_write,
@@ -28,6 +30,7 @@ from . import (
     schema_loader,
     self_check,
     signal_parser,
+    storage,
 )
 
 __version__ = "0.1.0"
@@ -38,6 +41,8 @@ __all__ = [
     "connect",
     "get_connection",
     "init_schema",
+    "SQLiteStorage",
+    "StorageBackend",
     "Harness",
     "create_harness",
     "schema_loader",
@@ -47,4 +52,5 @@ __all__ = [
     "self_check",
     "persistence",
     "scheduler",
+    "storage",
 ]

@@ -11,7 +11,6 @@
 
 from __future__ import annotations
 
-import sqlite3
 import warnings
 from datetime import datetime, timezone
 from typing import Any
@@ -26,6 +25,7 @@ from . import (
     signal_parser,
 )
 from .config import Config
+from .storage import SQLiteStorage, StorageBackend
 
 UTC_FMT = "%Y-%m-%dT%H:%M:%S"
 
@@ -39,13 +39,17 @@ class Harness:
 
     持有：
       - config
-      - db connection
+      - storage backend（StorageBackend，ADR-2；默认 SQLiteStorage）
       - 运行时状态：turn / current_stage / current_scenario / dedup_state / check_freq
     """
 
-    def __init__(self, config: Config, conn: sqlite3.Connection | None = None) -> None:
+    def __init__(
+        self,
+        config: Config,
+        backend: StorageBackend | None = None,
+    ) -> None:
         self.config = config
-        self.conn = conn or self._init_conn()
+        self.backend = backend or self._init_backend()
         self.turn = 0
         self.current_stage = "grill"
         self.current_scenario = ""
@@ -60,10 +64,8 @@ class Harness:
         self.check_freq = self_check.CheckFrequencyManager()
         self.last_snapshot_turn = 0
 
-    def _init_conn(self) -> sqlite3.Connection:
-        from .db import get_connection
-
-        return get_connection(self.config)
+    def _init_backend(self) -> StorageBackend:
+        return SQLiteStorage.from_config(self.config)
 
     # ----------------------------------------------------------------
     # 启动加载
@@ -81,7 +83,7 @@ class Harness:
             "A6": True,
         }
         # F2 加载最近快照
-        snap = persistence.F2_load_latest_snapshot(self.config)
+        snap = persistence.F2_load_latest_snapshot(self.backend)
         recovery = snap["loaded"]["recovery_action"]
         if snap["loaded"]["snapshot"]:
             s = snap["loaded"]["snapshot"]
@@ -194,7 +196,7 @@ class Harness:
             result["d8_validated"] = validation
             if validation["validated"]["passed"]:
                 write = memory_write.D6_append_2d_entry(
-                    self.conn,
+                    self.backend,
                     suggestion["change"],
                     suggestion["reason"],
                     suggestion["affected_layer"],
@@ -207,7 +209,7 @@ class Harness:
         if self.turn - self.last_snapshot_turn >= self.config.snapshot_interval:
             snap = persistence.F1_take_snapshot(
                 self.turn,
-                self.conn,
+                self.backend,
                 self.config,
                 current_stage=self.current_stage,
                 current_scenario=self.current_scenario,
@@ -237,7 +239,7 @@ class Harness:
         # 2a 召回 + C5/C6 后处理
         if entities:
             r2a = memory_recall.C1_recall_2a(
-                entities, time_range or {}, self.conn
+                entities, time_range or {}, self.backend
             )
             tagged = memory_recall.C5_apply_recall_permission(r2a["records"])
             rewritten = memory_recall.C6_rewrite_voice(tagged["tagged_records"], "2a")
@@ -245,7 +247,7 @@ class Harness:
             result["layer_2a_rewritten"] = rewritten["rewritten"]
         # 2b 召回
         if entity:
-            r2b = memory_recall.C2_recall_2b(entity, self.conn)
+            r2b = memory_recall.C2_recall_2b(entity, self.backend)
             result["layer_2b_profile"] = r2b["profile"]
             facts = r2b["profile"]["facts"]
             tagged = memory_recall.C5_apply_recall_permission(facts)
@@ -253,7 +255,7 @@ class Harness:
             result["layer_2b_rewritten"] = rewritten["rewritten"]
         # 2c 召回
         if patterns is not None:
-            r2c = memory_recall.C3_recall_2c(patterns, self.conn)
+            r2c = memory_recall.C3_recall_2c(patterns, self.backend)
             tagged = memory_recall.C5_apply_recall_permission(r2c["records"])
             rewritten = memory_recall.C6_rewrite_voice(
                 tagged["tagged_records"], "2c"

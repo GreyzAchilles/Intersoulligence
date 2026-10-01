@@ -2,6 +2,9 @@
 
 Layer 2 数据写入 + 字段管理 + 伦理校验。
 
+v2 M1：D6/D9 的 SQL 实现下沉到 StorageBackend 仓储（ADR-2），
+本模块保留写入策略（字段分流 / 伦理校验），存储只做原语。
+
 来源：PRD §11 序号 13
        接口-v1 §D（4 个写入接口）
        架构 §4.2b 字段分流 / §4.2d 单路径人格触发式自评
@@ -9,14 +12,10 @@ Layer 2 数据写入 + 字段管理 + 伦理校验。
 
 from __future__ import annotations
 
-import sqlite3
 import warnings
-from datetime import datetime, timezone
 from typing import Any
 
-from .db import from_json, to_json
-
-UTC_FMT = "%Y-%m-%dT%H:%M:%S"
+from .storage import StorageBackend, utc_now_iso
 
 # 2d 触发关键词（架构 §4.2d 写入机制）
 USER_FEEDBACK_KEYWORDS = {"辛苦", "谢谢", "不错", "很好", "改一下", "调整一下", "不太对"}
@@ -31,15 +30,11 @@ PROTECTED_AFFECTED_LAYERS = {"Layer 0", "Layer 0.1", "Layer 0.2", "Layer 0.3"}
 USER_JUDGMENT_KEYWORDS = {"他喜欢", "你是个", "老板喜欢", "用户其实"}
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime(UTC_FMT)
-
-
 # ---------------------------------------------------------------------------
-# D6 append_2d_entry(change, reason, affected_layer, ...)
+# D6 append_2d_entry(backend, change, reason, affected_layer, ...)
 # ---------------------------------------------------------------------------
 def D6_append_2d_entry(
-    conn: sqlite3.Connection,
+    backend: StorageBackend,
     change: str,
     reason: str,
     affected_layer: str,
@@ -69,14 +64,17 @@ def D6_append_2d_entry(
         change = stripped
         warnings.warn("D6 stripped user-judgment content")
 
-    ts = timestamp or _now_iso()
-    cur = conn.execute(
-        "INSERT INTO self_growth_ledger (change, reason, affected_layer, timestamp, reversible) "
-        "VALUES (?, ?, ?, ?, ?)",
-        (change, reason, affected_layer, ts, 1 if reversible else 0),
+    ts = timestamp or utc_now_iso()
+    new_id = backend.ledger.append(
+        {
+            "change": change,
+            "reason": reason,
+            "affected_layer": affected_layer,
+            "timestamp": ts,
+            "reversible": reversible,
+        }
     )
-    conn.commit()
-    return {"appended": {"id": cur.lastrowid, "timestamp": ts}}
+    return {"appended": {"id": new_id, "timestamp": ts}}
 
 
 # ---------------------------------------------------------------------------
@@ -216,10 +214,10 @@ def D8_validate_2d_entry(entry: dict[str, Any]) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# D9 write_2b_entry(entity, field, value, mode, conn, timestamp=None)
+# D9 write_2b_entry(backend, entity, field, value, mode, timestamp=None)
 # ---------------------------------------------------------------------------
 def D9_write_2b_entry(
-    conn: sqlite3.Connection,
+    backend: StorageBackend,
     entity: str,
     field: str,
     value: Any,
@@ -246,51 +244,28 @@ def D9_write_2b_entry(
         raise ValueError(
             f"D9 field {field} requires mode '{expected_mode}', got '{mode}' — refused"
         )
-    ts = timestamp or _now_iso()
-    row = conn.execute(
-        "SELECT * FROM entity_profile WHERE entity = ?", (entity,)
-    ).fetchone()
-    if row is None:
-        conn.execute(
-            "INSERT INTO entity_profile (entity, facts, current_status, judgment, updated_at) "
-            "VALUES (?, '[]', '[]', '[]', ?)",
-            (entity, ts),
-        )
-        conn.commit()
-        row = conn.execute(
-            "SELECT * FROM entity_profile WHERE entity = ?", (entity,)
-        ).fetchone()
+    ts = timestamp or utc_now_iso()
+    if backend.entities.get(entity) is None:
+        backend.entities.ensure(entity, ts)
 
     affected_entries: list[Any] = []
-    old_value = from_json(row[field])
+    old_value = backend.entities.get_field(entity, field)
 
     if mode == "overwrite":
         new_value = value if isinstance(value, list) else [value]
         affected_entries = list(old_value)
-        conn.execute(
-            f"UPDATE entity_profile SET {field} = ?, updated_at = ? WHERE entity = ?",
-            (to_json(new_value), ts, entity),
-        )
+        backend.entities.set_field(entity, field, new_value, ts)
     elif mode == "covering_update":
         val = value if isinstance(value, dict) else {"content": value, "timestamp": ts}
         if not isinstance(val, dict):
             val = {"content": str(value), "timestamp": ts}
         affected_entries = list(old_value)
-        old_value = [val]
-        conn.execute(
-            f"UPDATE entity_profile SET {field} = ?, updated_at = ? WHERE entity = ?",
-            (to_json(old_value), ts, entity),
-        )
+        backend.entities.set_field(entity, field, [val], ts)
     else:  # append
         val = value if isinstance(value, dict) else {"content": value, "timestamp": ts}
         if not isinstance(val, dict):
             val = {"content": str(value), "timestamp": ts}
-        old_value = old_value + [val]
-        conn.execute(
-            f"UPDATE entity_profile SET {field} = ?, updated_at = ? WHERE entity = ?",
-            (to_json(old_value), ts, entity),
-        )
-    conn.commit()
+        backend.entities.set_field(entity, field, old_value + [val], ts)
     return {
         "written": {
             "entity": entity,

@@ -661,6 +661,8 @@ v1 经代码核实的三个写侧缺口（2026-10-01 盘点）：
 
 **实现矩阵**：`SQLiteAdapter`（参考实现，v1 schema 平移）→ `sqlite-vec` 向量后端（同库扩展，零部署，契合分发）→ 关系型第二后端（接口就绪，不在 v2 交付）。
 
+> **实施状态（2026-10-01，M1 完成）**：契约与参考实现已落地 `persona_runtime/storage/`（base.py 端口 + sqlite_adapter.py + file_snapshot.py），`db.py` 转兼容 shim；C1-C4 / D6 / D9 / F1 / F2 / F4、harness / mcp_server / demo 全部去 conn 化挂 backend；4 处方言移植点消除（DDL 去 datetime('now') 默认值、F4 日期算术 Python 侧 `_compute_2a_transitions`、find_by_entities 语义方法化、行协议 dict + LIMIT 参数化）；`tests/test_storage.py` 契约单测 20 用例。验收：230 用例全过（v1 行为不变）+ 覆盖率 93% + demo 12/12 + MCP 冒烟。M2 起的 D1/D2 写侧将直接基于 InteractionRepo.append_entry / append_batch（M1 已随适配器实现）。
+
 **MCP 侧**：`persona_layer2_query` / `persona_runtime_op` 的 conn 参数改为注入 backend；对 LLM / work agent 的 5 工具面不变。
 
 ### 13.4 ADR-3 persona bundle：人格文件的存在形式

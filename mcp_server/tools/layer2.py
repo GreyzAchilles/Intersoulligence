@@ -2,15 +2,17 @@
 
 来源：PRD §11 序号 21, §7.3
        接口-v2 Layer 2 接口（7 个 operations）
+
+v2 M1：conn → backend（StorageBackend，ADR-2）。
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 from persona_runtime.config import Config
 from persona_runtime import memory_recall, memory_write
+from persona_runtime.storage import StorageBackend
 
 VALID_OPS = {
     "recall_2a",
@@ -25,7 +27,7 @@ VALID_OPS = {
 
 def persona_layer2_query(
     operation: str,
-    conn: sqlite3.Connection,
+    backend: StorageBackend,
     params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """persona_layer2_query — Layer 2 读写统一入口。
@@ -45,17 +47,17 @@ def persona_layer2_query(
     try:
         if operation == "recall_2a":
             return memory_recall.C1_recall_2a(
-                params.get("entities", []), params.get("time_range", {}), conn
+                params.get("entities", []), params.get("time_range", {}), backend
             )
         if operation == "recall_2b":
-            return memory_recall.C2_recall_2b(params["entity"], conn)
+            return memory_recall.C2_recall_2b(params["entity"], backend)
         if operation == "recall_2c":
-            return memory_recall.C3_recall_2c(params.get("patterns"), conn)
+            return memory_recall.C3_recall_2c(params.get("patterns"), backend)
         if operation == "recall_2d":
-            return memory_recall.C4_recall_2d(params.get("recent", 0), conn)
+            return memory_recall.C4_recall_2d(params.get("recent", 0), backend)
         if operation == "append_2d":
             return memory_write.D6_append_2d_entry(
-                conn,
+                backend,
                 params["change"],
                 params["reason"],
                 params["affected_layer"],
@@ -68,7 +70,7 @@ def persona_layer2_query(
             )
         if operation == "write_2b":
             return memory_write.D9_write_2b_entry(
-                conn,
+                backend,
                 params["entity"],
                 params["field"],
                 params["value"],

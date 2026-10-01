@@ -2,15 +2,17 @@
 
 来源：PRD §11 序号 22, §7.3
        接口-v1 跨层辅佐 + Layer 1 信号处理 + 持久化 + 调度（15 个 operations）
+
+v2 M1：conn → backend（StorageBackend，ADR-2）。
 """
 
 from __future__ import annotations
 
-import sqlite3
 from typing import Any
 
 from persona_runtime.config import Config
 from persona_runtime import persistence, scheduler, signal_parser
+from persona_runtime.storage import StorageBackend
 
 VALID_OPS = {
     "parse_stage_transition",
@@ -35,7 +37,7 @@ def persona_runtime_op(
     operation: str,
     config: Config,
     params: dict[str, Any] | None = None,
-    conn: sqlite3.Connection | None = None,
+    backend: StorageBackend | None = None,
     available_scenarios: list[str] | None = None,
 ) -> dict[str, Any]:
     """persona_runtime_op — 运行时操作统一入口。
@@ -86,7 +88,7 @@ def persona_runtime_op(
         if operation == "take_snapshot":
             return persistence.F1_take_snapshot(
                 params["turn"],
-                conn,
+                backend,
                 config,
                 current_stage=params.get("current_stage", "grill"),
                 current_scenario=params.get("current_scenario", ""),
@@ -96,9 +98,9 @@ def persona_runtime_op(
                 trigger_decay=params.get("trigger_decay", True),
             )
         if operation == "load_latest_snapshot":
-            return persistence.F2_load_latest_snapshot(config)
+            return persistence.F2_load_latest_snapshot(backend)
         if operation == "apply_decay":
-            return persistence.F4_apply_decay(params["now"], conn, config)
+            return persistence.F4_apply_decay(params["now"], backend, config)
         if operation == "spawn_plan_subagent":
             return scheduler.G1_spawn_plan_subagent(
                 params.get("grill_output", ""),

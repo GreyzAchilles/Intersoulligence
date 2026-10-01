@@ -31,5 +31,5 @@ def persona_get_system_prompt(config: Config) -> dict[str, Any]:
     except (ValueError, FileNotFoundError) as e:
         return {"error": str(e)}
     finally:
-        if h.conn is not None:
-            h.conn.close()
+        if h.backend is not None:
+            h.backend.close()
