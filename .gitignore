@@ -38,5 +38,8 @@ htmlcov/
 .idea/
 *.swp
 .DS_Store
+
+# ZCode session state
+.zcode/
 # Local opencode runtime config (machine-specific)
 opencode.json
