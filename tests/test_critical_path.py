@@ -11,6 +11,7 @@ PRD §8 12 步闭环全过 → 关键路径 PASS。
 from __future__ import annotations
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -143,7 +144,10 @@ def test_step_07_recall_per_layer(harness):
 
 def test_step_08_recall_postprocessing(harness):
     """8. 召回后处理 — C5 应用 permission + C6 语态改写 → 注入 prompt。"""
-    insert_interaction(harness.conn, entities=["x"], content="测试", channel="direct")
+    # timestamp 种入当前时间：C5 的 <30 天 cite 档依赖记录年龄（timestamp 优先于
+    # last_accessed 参与 age 计算），固定日期会让本测试随真实时间流逝而失效
+    fresh_ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+    insert_interaction(harness.conn, entities=["x"], content="测试", channel="direct", timestamp=fresh_ts)
     recalled = memory_recall.C1_recall_2a(["x"], {}, harness.conn)
     tagged = memory_recall.C5_apply_recall_permission(recalled["records"])
     assert tagged["tagged_records"][0]["permission"] == "cite"
