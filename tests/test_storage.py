@@ -103,9 +103,13 @@ def test_interaction_touch_access(backend):
     assert rec["last_accessed"] == now
 
 
-def test_interaction_find_similar_not_supported(backend):
-    with pytest.raises(StorageNotSupported):
-        backend.interactions.find_similar([0.1, 0.2], top_k=3)
+def test_interaction_find_similar_not_supported(tmp_config):
+    no_vec = SQLiteStorage.from_config(tmp_config, embedding_provider=None)
+    try:
+        with pytest.raises(StorageNotSupported):
+            no_vec.interactions.find_similar([0.1, 0.2], top_k=3)
+    finally:
+        no_vec.close()
 
 
 # ---------------------------------------------------------------------------

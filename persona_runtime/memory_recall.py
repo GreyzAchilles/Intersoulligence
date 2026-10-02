@@ -21,20 +21,51 @@ UTC_FMT = "%Y-%m-%dT%H:%M:%S"
 
 
 # ---------------------------------------------------------------------------
-# C1 recall_2a(entities, time_range, backend)
+# C1 recall_2a(entities, time_range, backend, semantic_query=None)
 # ---------------------------------------------------------------------------
+SEMANTIC_TOP_K = 5
+
+
 def C1_recall_2a(
     entities: list[str],
     time_range: dict[str, str],
     backend: StorageBackend,
+    semantic_query: str | None = None,
 ) -> dict[str, Any]:
     """C1 — 互动事实召回。召回时更新 last_accessed（重置衰减计时）。
 
-    entities 为空 → 返回空列表（PRD A1：entities 为空 → 空列表）。
+    v2 M3 双路召回（§13.5）：entities 精确命中 ∪ find_similar 语义命中
+    （backend 注入 EmbeddingProvider 且 semantic_query 非空时启用）。
+    每条记录附带 recall_channels（["entity"]/["semantic"]/两者），供 C5 联动。
+
+    entities 与 semantic_query 均为空 → 返回空列表。
     """
-    if not entities:
+    if not entities and not semantic_query:
         return {"records": []}
-    records = backend.interactions.find_by_entities(entities, time_range)
+    merged: dict[int, dict[str, Any]] = {}
+    if entities:
+        for rec in backend.interactions.find_by_entities(entities, time_range):
+            rec = dict(rec)
+            rec["recall_channels"] = ["entity"]
+            merged[rec["id"]] = rec
+    if semantic_query:
+        provider = getattr(backend, "embedding_provider", None)
+        if provider is not None:
+            try:
+                vector = provider.embed([semantic_query])[0]
+                for rec in backend.interactions.find_similar(vector, top_k=SEMANTIC_TOP_K):
+                    existing = merged.get(rec["id"])
+                    if existing is not None:
+                        existing["recall_channels"].append("semantic")
+                    else:
+                        rec = dict(rec)
+                        rec["recall_channels"] = ["semantic"]
+                        merged[rec["id"]] = rec
+            except Exception as exc:  # noqa: BLE001 — 语义路故障降级为纯精确路
+                warnings.warn(f"C1 semantic recall failed: {exc}")
+        else:
+            warnings.warn("C1 semantic_query given but backend has no embedding provider")
+    records = sorted(merged.values(), key=lambda r: r["timestamp"], reverse=True)
     if records:
         backend.interactions.touch_access(
             [r["id"] for r in records], utc_now_iso()
@@ -125,6 +156,11 @@ def C5_apply_recall_permission(records: list[dict[str, Any]]) -> dict[str, Any]:
 def _compute_permission(rec: dict[str, Any], age_days: int) -> tuple[str, str]:
     if age_days > 90:
         return ("associate-only", "仅作为内部参考，不向用户陈述")
+    # v2 M3 C5 联动（§13.5）：仅语义命中 → 语义单路，无实体/时间锚的
+    # 陈述资格不高于 cautious——记忆被错误当作事实陈述是人格崩塌的常见原因
+    channels = rec.get("recall_channels")
+    if channels == ["semantic"]:
+        return ("cautious", "用'我好像记得……'等留口吻")
     channel = rec.get("channel", "direct")
     has_entities = bool(rec.get("entities"))
     if has_entities and channel in ("direct", "indirect"):

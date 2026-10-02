@@ -83,10 +83,13 @@ intersoulligence/
 │   ├── db.py                               # 兼容 shim（实现已移至 storage.sqlite_adapter）
 │   ├── schema_loader.py                    # A1-A4, A6-A9
 │   ├── signal_parser.py                    # B1-B4
-│   ├── memory_recall.py                     # C1-C6（召回编排 + 后处理；SQL 已下沉 storage）
-│   ├── memory_write.py                      # D6-D9（写入策略 + 校验；SQL 已下沉 storage）
+│   ├── memory_recall.py                     # C1-C6（召回编排 + 双路召回 + 后处理）
+│   ├── memory_write.py                      # D1, D2, D6-D9（写入策略 + 校验）
 │   ├── self_check.py                       # E1
-│   ├── persistence.py                      # F1, F2, F4（编排；文件 IO / 日期算术已下沉）
+│   ├── persistence.py                      # F1-F4（快照 / 会话总结 / 衰减）
+│   ├── scribe.py                           # 对话 → 2a 规则提取（v2 M2）
+│   ├── librarian.py                        # 2c 聚类 deep cycle（v2 M4）
+│   ├── overlay.py                          # 2d → Layer 1 演化覆盖层（v2 M4）
 │   ├── scheduler.py                        # G1, G4
 │   └── harness.py                          # C5+C6 强制约束点（持有 StorageBackend）
 ├── mcp_server/                             # MCP server
@@ -113,6 +116,8 @@ intersoulligence/
 │   ├── test_harness.py                     # C5+C6 约束测试
 │   ├── test_critical_path.py               # 12 步闭环
 │   ├── test_storage.py                     # v2 M1：StorageBackend 契约单测（20 用例）
+│   ├── test_v2_features.py                 # v2 M2-M4：新能力单元测试（26 用例）
+│   ├── test_memory_lifecycle.py            # v2 M5：记忆增长闭环（2 用例）
 │   └── test_mcp_server.py                  # MCP 5 工具
 └── demo/                                   # demo work agent
     ├── run.py                              # demo 入口
@@ -453,6 +458,7 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - 2026-10-01：**接口计数勘误 25 → 28**。Wiki `接口-v1-按工程分类.md` 汇总表「42 → 25」为算术错误——其各类保留数 8 + 4 + 6 + 4 + 1 + 3 + 2 + 0 = 28，与逐接口枚举一致；§1 公式「B8 / C10」笔误同步修正为「B4 / C6」。历史条目中的「25 个」保留原文不改，仅改活文档。
 - 2026-10-01：**v2 设计定稿**（`ARCHITECTURE.md` §13 新增，本文档 §3.3 / §15 / §18 同步）。五项决策：① v2 主题 = 记忆生命线（写侧缺口：2a/2c 零运行时写入、2d 无应用），H1/H2 等顺延 v3；② ADR-1 语言策略——Python 编排层不换，计算下沉引擎，profiling 门槛先行；③ ADR-2 存储抽象 StorageBackend 可插拔（**supersede v1「SQLite 单实例不走 Postgres」**），SQLite 参考实现 + sqlite-vec 向量后端；④ ADR-3 persona bundle 规范（四角色格式拆分、目录常态 + .isoul 传输态、manifest Layer 0 哈希、DB 为源 markdown 为投影）；⑤ **E2E 策略变更**——完整 6 阶段真 LLM 验收延后至产品成型，当前验收线 = MCP 冒烟 + canned 记忆增长闭环。v1.1 搁置问题 4（2b vs 2d 边界）随 F3 契约定稿，其余分级处置（§13.6）。
 - 2026-10-01：**v2 M1 存储契约实施完成**（ARCHITECTURE §13.3 / §13.6 M1）。新增 `persona_runtime/storage/`（base.py 端口契约 + EmbeddingProvider 接口 / sqlite_adapter.py 参考实现 / file_snapshot.py 快照存储）；`db.py` 转兼容 shim；C1-C4 / D6 / D9 / F1 / F2 / F4 及 harness / mcp_server / demo 全部由 `conn: sqlite3.Connection` 改挂 `backend: StorageBackend`（生产侧 15 函数去 conn 化）。4 处方言移植点按 ADR-2 消除：时间戳 Python 侧生成（DDL 去 datetime('now') 默认值）、F4 日期算术改 Python 阈值计算（`_compute_2a_transitions`，阶段粒度失败隔离语义保持）、实体匹配收敛为语义方法 find_by_entities（LIKE 不再越过适配器边界）、行协议统一 dict + LIMIT 参数化。测试：conftest 增 `backend` fixture（conn 降为白盒断言层）、FlakyConn 改写为仓储级 FlakyLedger、新增 test_storage.py 契约单测 20 用例。**验收：230 用例全过（210 基线行为不变 + 20 新增）、覆盖率 93% 持平、demo 12/12 PASS、MCP 冒烟 5 工具全过**。
+- 2026-10-02：**v2 M2-M5 实施完成**（详见 ARCHITECTURE §13.7 实施注记与 REPORT-v2.md）。M2 写侧闭环：D1/D2（enum 扩展 `episode`）+ Scribe 规则提取（`scribe.py`）+ F3 三路落点（`persistence.py`，2b vs 2d 边界定稿）+ 端口扩展 `find_by_conversation`。M3 语义召回：`HashingEmbeddingProvider`（dim=256，默认注入）+ `interaction_embeddings` 表 + 暴力余弦 `find_similar` + C1 双路（`recall_channels`）+ C5 语义封顶 cautious + F4 向量行同步删除。M4 演化应用：`upsert_from_cluster` + `librarian.py` 规则聚类（每 6 次快照自动触发）+ `overlay.py`（A11 + 2d→Layer 1 挂钩 + prompt 合成）+ layer0_get `overlay` 字段。M5 验收：**258 用例全过（+28）**、覆盖率 92%、demo 12/12、MCP 冒烟含全部新 operation、ADR-1 门槛实测（冷启动 52ms / 每轮 p99 4.49ms）。Config 新增 `content_dir` / `cluster_interval_snapshots`。汇报与遗留问题见 `REPORT-v2.md`。
 
 ## 15. 功能追踪（原 docs/FEATURES.md）
 
@@ -552,22 +558,31 @@ CREATE INDEX idx_ledger_timestamp ON self_growth_ledger(timestamp);
 - [x] 测试迁移（conftest `backend` fixture / conn 降为白盒层；FlakyConn → FlakyLedger 仓储级拦截；生产 harness / mcp / demo 全部挂 backend）+ 新增 `tests/test_storage.py` 契约单测 20 用例
 - [x] EmbeddingProvider 接口定义（M3 落地本地小模型实现）
 
+#### M2 写侧闭环（✅ 2026-10-02 实施完成）
+- [x] D1 `append_2a_entry` + D2 `append_2a_batch`（`memory_write.py`：type 枚举校验 + 80 字上限 + 整批原子；enum 扩展 `episode`）
+- [x] Scribe 对话→2a 提取（`scribe.py` 规则提取起步：偏好/事实/事件三类模式 + 实体白名单；`extract_fn` 为 LLM 提取挂点）
+- [x] F3 `persist_session_summary`（三路落点：2a episode 经 D2 / 2b current_status 经 D9 / `content/sessions/*.md` markdown 投影；随此定稿 2b vs 2d 边界——F3 永不产 2d）
+- [x] 端口扩展：`InteractionRepo.find_by_conversation`（F3 轨迹读取）；MCP：`append_2a` / `append_2a_batch` / `persist_session_summary` 三 operation
+- [x] harness 主闭环挂 Scribe（每轮自动提取写入，故障隔离不阻断）
+
+#### M3 语义召回（✅ 2026-10-02 实施完成）
+- [x] `HashingEmbeddingProvider`（`storage/embedding.py`：字符 bigram 哈希 dim=256，本地零依赖确定性；**默认注入** `from_config`，显式传 None 关闭）
+- [x] `interaction_embeddings` 向量表 + `find_similar`（纯 Python 暴力余弦）
+- [x] C1 双路召回（entities 精确 ∪ 语义，`recall_channels` 通道标注）+ C5 联动（仅语义命中 → cautious 封顶）+ F4 对齐（clear_vector_index/wipe_content 同步删向量行）
+- [x] MCP：`recall_2a` 增 `semantic_query` 参数
+
+#### M4 演化应用（✅ 2026-10-02 实施完成）
+- [x] `PatternRepo.upsert_from_cluster`（confidence 只增 + evidence 累计 + UNIQUE 去重）
+- [x] 2c 聚类 deep cycle（`librarian.py`：规则聚类起步——贪心凝聚 + 余弦相似度；`cluster_fn` 为 LLM 聚类挂点；harness 每 N=6 次快照自动触发）
+- [x] overlay.yaml 覆盖层（`overlay.py`：`layer1_overrides` 结构化覆盖 + `adjustments` 2d 文字调整；机写、只许 Layer 1）+ A11 `load_persona_overlay`（PROTECTED 拒改校验）
+- [x] harness 接线：D6(Layer 1) 成功 → overlay 写入；init → A11 加载；build_system_prompt 合成演化段；MCP：layer0_get 增 `overlay` 字段 + layer2 `cluster_patterns`
+
+#### M5 验收（✅ 2026-10-02）
+- [x] MCP server 冒烟：5 工具 + M2-M4 全部新 operation 端到端调用通过（冷启动含首调 52ms < 1s 门槛）
+- [x] canned 记忆增长闭环：`tests/test_memory_lifecycle.py`（对话→2a→双路召回→F3→F4→2c→2d→overlay→prompt 演化 全链路）
+- [x] ADR-1 profiling 门槛实测：冷启动 52ms（<1s）、process_turn p99 = 4.49ms（<50ms，200 轮基准含 Scribe 写入）
+
 #### M2 写侧闭环
-- [ ] D1 `append_2a_entry` + D2 `append_2a_batch`
-- [ ] Scribe 对话→2a 提取（规则提取起步）
-- [ ] F3 `persist_session_summary`（2a episode + 2b 经 D9 + markdown 投影；随此定稿 2b vs 2d 边界）
-
-#### M3 语义召回
-- [ ] sqlite-vec 向量后端 + `find_similar`
-- [ ] C1 双路召回 + C5 三档联动 + F4 向量删除对齐
-
-#### M4 演化应用
-- [ ] 2c 聚类 deep cycle（Librarian，confidence 只增 / evidence 累计）
-- [ ] overlay.yaml 覆盖层 + A11 `load_persona_overlay` + Layer 0 拒改校验
-
-#### M5 验收
-- [ ] MCP server 冒烟（启动 + 5 工具全部可调用）
-- [ ] canned 记忆增长闭环（对话 → 2a → 召回 → F3 → 2b/投影 → 2c/overlay）
 
 ## 16. v1.1 Debug 修复记录（原 docs/Debug_v1_1.md）
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from persona_runtime.config import Config
-from persona_runtime import schema_loader
+from persona_runtime import overlay as overlay_mod, schema_loader
 
 VALID_FIELDS = {
     "schema",
@@ -18,6 +18,7 @@ VALID_FIELDS = {
     "scenarios",
     "self_check_policy",
     "initial_scenario_check",
+    "overlay",  # v2 M4：A11 演化覆盖层状态
 }
 
 
@@ -25,7 +26,8 @@ def persona_layer0_get(field: str, config: Config) -> dict[str, Any]:
     """persona_layer0_get — Layer 0 数据一次性获取。
 
     input:
-      field: enum[schema, anchors, value_kernel, scenarios, self_check_policy, initial_scenario_check]
+      field: enum[schema, anchors, value_kernel, scenarios, self_check_policy,
+                  initial_scenario_check, overlay]
     output:
       data: 对应字段完整数据
     errors:
@@ -34,6 +36,11 @@ def persona_layer0_get(field: str, config: Config) -> dict[str, Any]:
     """
     if field not in VALID_FIELDS:
         return {"error": f"field '{field}' not recognized", "valid": list(VALID_FIELDS)}
+    if field == "overlay":
+        try:
+            return {"data": {"overlay": overlay_mod.A11_load_persona_overlay(config)}}
+        except (ValueError, FileNotFoundError) as e:
+            return {"error": str(e)}
     dispatch = {
         "schema": schema_loader.A1_load_persona_schema,
         "anchors": schema_loader.A2_get_identity_anchors,

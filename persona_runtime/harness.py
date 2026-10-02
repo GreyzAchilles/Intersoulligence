@@ -16,13 +16,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 from . import (
+    librarian,
     memory_recall,
     memory_write,
+    overlay as overlay_mod,
     persistence,
     scheduler,
     schema_loader,
     self_check,
     signal_parser,
+    scribe,
 )
 from .config import Config
 from .storage import SQLiteStorage, StorageBackend
@@ -63,6 +66,10 @@ class Harness:
         self.short_window: list[bool] = []
         self.check_freq = self_check.CheckFrequencyManager()
         self.last_snapshot_turn = 0
+        self.snapshots_taken = 0
+        # v2：会话标识（Scribe/F3 归档用）+ 演化覆盖层（A11 加载前为空）
+        self.session_id = ""
+        self.overlay: dict[str, Any] = overlay_mod.empty_overlay()
 
     def _init_backend(self) -> StorageBackend:
         return SQLiteStorage.from_config(self.config)
@@ -71,7 +78,7 @@ class Harness:
     # 启动加载
     # ----------------------------------------------------------------
     def init(self) -> dict[str, Any]:
-        """启动加载 — A1-A4/A6-A9 全部加载 + F2 快照恢复。"""
+        """启动加载 — A1-A4/A6-A9 全部加载 + F2 快照恢复 + A11 overlay 加载。"""
         # 加载 schema（A1）
         schema_loader.reset_cache()
         schema_loader.A1_load_persona_schema(self.config)
@@ -82,6 +89,8 @@ class Harness:
             "A4": bool(schema_loader.A4_get_available_scenarios(self.config)["available_scenarios"]),
             "A6": True,
         }
+        # A11 加载演化覆盖层（缺失 → 空 overlay，行为与 v1 一致）
+        self.overlay = overlay_mod.A11_load_persona_overlay(self.config)
         # F2 加载最近快照
         snap = persistence.F2_load_latest_snapshot(self.backend)
         recovery = snap["loaded"]["recovery_action"]
@@ -203,7 +212,31 @@ class Harness:
                 )
                 result["d6_appended"] = write
                 self.dedup_state["last_self_eval_turn"] = self.turn
+                # v2 M4：affected_layer=Layer 1 的自评 → 同步落 overlay（演化应用）
+                if (
+                    suggestion.get("affected_layer") == "Layer 1"
+                    and "appended" in write
+                ):
+                    try:
+                        result["overlay_written"] = overlay_mod.append_2d_adjustment(
+                            self.config,
+                            suggestion["change"],
+                            suggestion["reason"],
+                            write["appended"]["timestamp"],
+                            write["appended"]["id"],
+                        )
+                        self.overlay = overlay_mod.A11_load_persona_overlay(self.config)
+                    except Exception as exc:  # noqa: BLE001 — overlay 故障不阻断主循环
+                        warnings.warn(f"overlay write failed: {exc}")
             self.dedup_state["last_trigger_map"][trig["trigger"]["reason"]] = self.turn
+
+        # 4.5) Scribe：对话 → 2a 提取写入（v2 M2 记忆生命线入口）
+        result["scribe"] = scribe.scribe_turn(
+            self.backend,
+            user_message,
+            ai_response,
+            session_id=self.session_id,
+        )["scribe"]
 
         # 5) 每 20 轮：F1 快照 + F4 衰减
         if self.turn - self.last_snapshot_turn >= self.config.snapshot_interval:
@@ -220,6 +253,16 @@ class Harness:
             )
             result["f1_snapshot"] = snap
             self.last_snapshot_turn = self.turn
+            self.snapshots_taken += 1
+            # v2 M4：每 N 次快照触发 2c 聚类 deep cycle（Librarian）
+            if self.snapshots_taken >= self.config.cluster_interval_snapshots:
+                try:
+                    result["librarian_cluster"] = librarian.cluster_cooling_patterns(
+                        self.backend
+                    )
+                except Exception as exc:  # noqa: BLE001 — 聚类故障不阻断主循环
+                    warnings.warn(f"librarian cluster failed: {exc}")
+                self.snapshots_taken = 0
 
         self.turn += 1
         return result
@@ -233,13 +276,17 @@ class Harness:
         time_range: dict[str, str] | None = None,
         entity: str | None = None,
         patterns: list[str] | None = None,
+        semantic_query: str | None = None,
     ) -> dict[str, Any]:
-        """C1-C6 召回 + 后处理流水线 → 返回可注入 prompt 的已标记已改写记录。"""
+        """C1-C6 召回 + 后处理流水线 → 返回可注入 prompt 的已标记已改写记录。
+
+        semantic_query（v2 M3）：非空且 backend 带 EmbeddingProvider → C1 双路召回。
+        """
         result: dict[str, Any] = {}
         # 2a 召回 + C5/C6 后处理
-        if entities:
+        if entities or semantic_query:
             r2a = memory_recall.C1_recall_2a(
-                entities, time_range or {}, self.backend
+                entities, time_range or {}, self.backend, semantic_query=semantic_query
             )
             tagged = memory_recall.C5_apply_recall_permission(r2a["records"])
             rewritten = memory_recall.C6_rewrite_voice(tagged["tagged_records"], "2a")
@@ -417,6 +464,13 @@ class Harness:
                 f"- 蛐蛐（~> 前缀单独成行）：格式「~> 内容」，每轮最多 {aside.get('max_per_turn', 2)} 条"
             )
         lines.append("")
+
+        # v2 M4：演化覆盖层合成（persona.yaml 本体不动，overlay 只承载 Layer 1）
+        overlay_section = overlay_mod.render_prompt_section(
+            getattr(self, "overlay", None) or overlay_mod.empty_overlay()
+        )
+        if overlay_section:
+            lines.append(overlay_section)
 
         # 工具说明 + 结构化信号约束
         lines.append("【工具与行为约束】")

@@ -91,7 +91,7 @@ def _build_server() -> Any:
             params: 各 operation 不同。
         """
         h = _ensure_harness(_STATE)
-        return persona_layer2_query(operation, h.backend, params)
+        return persona_layer2_query(operation, h.backend, params, config=h.config)
 
     @mcp.tool()
     def persona_runtime_op_tool(

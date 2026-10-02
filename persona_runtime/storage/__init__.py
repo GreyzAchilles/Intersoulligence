@@ -18,6 +18,7 @@ from .base import (
     to_json,
     utc_now_iso,
 )
+from .embedding import HashingEmbeddingProvider
 from .file_snapshot import FileSnapshotStore
 from .sqlite_adapter import (
     SCHEMA_SQL,
@@ -31,6 +32,7 @@ __all__ = [
     "EmbeddingProvider",
     "EntityRepo",
     "FileSnapshotStore",
+    "HashingEmbeddingProvider",
     "InteractionRepo",
     "LedgerRepo",
     "PatternRepo",

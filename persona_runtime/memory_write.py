@@ -29,6 +29,86 @@ PROTECTED_AFFECTED_LAYERS = {"Layer 0", "Layer 0.1", "Layer 0.2", "Layer 0.3"}
 # 对用户判断的关键词（D8 伦理约束）
 USER_JUDGMENT_KEYWORDS = {"他喜欢", "你是个", "老板喜欢", "用户其实"}
 
+# 2a 类型枚举（v1 五类 + v2 M2 新增 episode：F3 会话总结落点，§13.5）
+INTERACTION_TYPES = {"observation", "reflection", "preference", "event", "state", "episode"}
+CONTENT_MAX_LEN = 80  # 架构 §7.1：2a content ≤80 字
+
+
+# ---------------------------------------------------------------------------
+# D1 append_2a_entry(backend, entry, timestamp=None)（v2 §13.5）
+# ---------------------------------------------------------------------------
+def D1_append_2a_entry(
+    backend: StorageBackend,
+    entry: dict[str, Any],
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    """D1 — 互动事实单条写入（Scribe 每轮提取入口）。
+
+    校验：type 必须在枚举内；content 缺失或 >80 字 → 拒绝（ValueError）。
+    写后进入 F4 衰减范围；单条即事务（适配器保证）。
+    """
+    _validate_2a_entry(entry)
+    ts = timestamp or entry.get("timestamp") or utc_now_iso()
+    new_id = backend.interactions.append_entry(
+        {
+            "content": entry["content"],
+            "type": entry["type"],
+            "entities": entry.get("entities") or [],
+            "channel": entry.get("channel", "direct"),
+            "source_conversation": entry.get("source_conversation"),
+            "timestamp": ts,
+        }
+    )
+    return {"appended": {"id": new_id, "timestamp": ts, "type": entry["type"]}}
+
+
+# ---------------------------------------------------------------------------
+# D2 append_2a_batch(backend, entries, timestamp=None)（v2 §13.5）
+# ---------------------------------------------------------------------------
+def D2_append_2a_batch(
+    backend: StorageBackend,
+    entries: list[dict[str, Any]],
+    timestamp: str | None = None,
+) -> dict[str, Any]:
+    """D2 — 互动事实批量写入（F3 会话总结 / Scribe 攒批共用）。
+
+    整批单事务：部分失败整批回滚（与 F4 相反——写入保原子，衰减保隔离）。
+    """
+    if not isinstance(entries, list) or not entries:
+        raise ValueError("D2 entries must be a non-empty list")
+    for entry in entries:
+        _validate_2a_entry(entry)
+    ts = timestamp or utc_now_iso()
+    payloads = [
+        {
+            "content": e["content"],
+            "type": e["type"],
+            "entities": e.get("entities") or [],
+            "channel": e.get("channel", "direct"),
+            "source_conversation": e.get("source_conversation"),
+            "timestamp": e.get("timestamp") or ts,
+        }
+        for e in entries
+    ]
+    ids = backend.interactions.append_batch(payloads)
+    return {"appended": {"ids": ids, "count": len(ids), "timestamp": ts}}
+
+
+def _validate_2a_entry(entry: dict[str, Any]) -> None:
+    if not isinstance(entry, dict):
+        raise ValueError("D1/D2 entry must be a dict")
+    content = entry.get("content")
+    if not content or not str(content).strip():
+        raise ValueError("D1/D2 content missing — refused")
+    if len(str(content)) > CONTENT_MAX_LEN:
+        raise ValueError(
+            f"D1/D2 content exceeds {CONTENT_MAX_LEN} chars ({len(str(content))}) — refused"
+        )
+    if entry.get("type") not in INTERACTION_TYPES:
+        raise ValueError(
+            f"D1/D2 unknown type {entry.get('type')!r} — valid: {sorted(INTERACTION_TYPES)}"
+        )
+
 
 # ---------------------------------------------------------------------------
 # D6 append_2d_entry(backend, change, reason, affected_layer, ...)

@@ -30,6 +30,7 @@ class Config:
     schema_path: Path = field(init=False)
     db_path: Path = field(init=False)
     snapshot_dir: Path = field(init=False)
+    content_dir: Path = field(init=False)
 
     # harness 行为参数
     snapshot_interval: int = 20
@@ -49,17 +50,24 @@ class Config:
     vector_delete_days: int = 30
     content_wipe_days: int = 90
 
+    # 2c 聚类 deep cycle 触发间隔（次 F1 快照，v2 M4）
+    cluster_interval_snapshots: int = 6
+
     def __post_init__(self) -> None:
         self.data_dir = Path(self.data_dir)
         self.schema_path = self.data_dir / "persona_schema.yaml"
         self.db_path = self.data_dir / "persona.db"
         self.snapshot_dir = self.data_dir / "snapshots"
+        self.content_dir = self.data_dir / "content"
         self.schema_path = Path(
             os.environ.get("PERSONA_SCHEMA_PATH", str(self.schema_path))
         )
         self.db_path = Path(os.environ.get("PERSONA_DB_PATH", str(self.db_path)))
         self.snapshot_dir = Path(
             os.environ.get("PERSONA_SNAPSHOT_DIR", str(self.snapshot_dir))
+        )
+        self.content_dir = Path(
+            os.environ.get("PERSONA_CONTENT_DIR", str(self.content_dir))
         )
 
 
@@ -68,6 +76,7 @@ def load_config(
     schema_path: Path | str | None = None,
     db_path: Path | str | None = None,
     snapshot_dir: Path | str | None = None,
+    content_dir: Path | str | None = None,
 ) -> Config:
     """构造 Config，允许显式覆盖路径。
 
@@ -80,4 +89,6 @@ def load_config(
         cfg.db_path = Path(db_path)
     if snapshot_dir:
         cfg.snapshot_dir = Path(snapshot_dir)
+    if content_dir:
+        cfg.content_dir = Path(content_dir)
     return cfg

@@ -66,6 +66,14 @@ CREATE TABLE IF NOT EXISTS self_growth_ledger (
     created_at TEXT NOT NULL
 );
 
+-- v2 M3：语义召回向量表（sqlite-vec 虚表的纯 Python 前身，暴力余弦；
+-- 万行量级在 ADR-1 延迟预算内，性能升级留作后续选项）
+CREATE TABLE IF NOT EXISTS interaction_embeddings (
+    interaction_id INTEGER PRIMARY KEY,
+    dim INTEGER NOT NULL,
+    vector TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_interaction_timestamp ON interaction_memory(timestamp);
 CREATE INDEX IF NOT EXISTS idx_interaction_channel ON interaction_memory(channel);
 CREATE INDEX IF NOT EXISTS idx_interaction_status ON interaction_memory(status);
@@ -103,31 +111,14 @@ def init_schema(conn: sqlite3.Connection) -> None:
 # 2a
 # ---------------------------------------------------------------------------
 class SQLiteInteractions:
-    def __init__(self, conn: sqlite3.Connection) -> None:
+    def __init__(self, conn: sqlite3.Connection, embedding_provider=None) -> None:
         self._conn = conn
+        self._embedding = embedding_provider
 
     def append_entry(self, entry: dict[str, Any]) -> int:
-        ts = entry["timestamp"]
-        cur = self._conn.execute(
-            "INSERT INTO interaction_memory "
-            "(content, type, source_conv, timestamp, entities, channel, status, "
-            "last_accessed, vector_indexed, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                entry.get("content"),
-                entry["type"],
-                entry.get("source_conversation"),
-                ts,
-                to_json(entry.get("entities") or []),
-                entry.get("channel", "direct"),
-                entry.get("status", "active"),
-                entry.get("last_accessed") or ts,
-                1 if entry.get("vector_indexed", 1) else 0,
-                entry.get("created_at") or ts,
-            ),
-        )
+        rid = self._insert_one(entry)
         self._conn.commit()
-        return int(cur.lastrowid)
+        return rid
 
     def append_batch(self, entries: list[dict[str, Any]]) -> list[int]:
         ids: list[int] = []
@@ -142,6 +133,10 @@ class SQLiteInteractions:
 
     def _insert_one(self, entry: dict[str, Any]) -> int:
         ts = entry["timestamp"]
+        # 向量同步生成（ADR-2 §13.5：D1/D2 写入时经 EmbeddingProvider 入索引）
+        vector_indexed = 1 if entry.get("vector_indexed") is None and self._embedding else 0
+        if entry.get("vector_indexed") is not None:
+            vector_indexed = 1 if entry["vector_indexed"] else 0
         cur = self._conn.execute(
             "INSERT INTO interaction_memory "
             "(content, type, source_conv, timestamp, entities, channel, status, "
@@ -156,11 +151,24 @@ class SQLiteInteractions:
                 entry.get("channel", "direct"),
                 entry.get("status", "active"),
                 entry.get("last_accessed") or ts,
-                1 if entry.get("vector_indexed", 1) else 0,
+                vector_indexed,
                 entry.get("created_at") or ts,
             ),
         )
-        return int(cur.lastrowid)
+        rid = int(cur.lastrowid)
+        if vector_indexed and entry.get("content"):
+            self._store_vector(rid, entry["content"])
+        return rid
+
+    def _store_vector(self, interaction_id: int, content: str) -> None:
+        if not self._embedding:
+            return
+        vec = self._embedding.embed([content])[0]
+        self._conn.execute(
+            "INSERT OR REPLACE INTO interaction_embeddings (interaction_id, dim, vector) "
+            "VALUES (?, ?, ?)",
+            (interaction_id, len(vec), to_json(vec)),
+        )
 
     def find_by_entities(
         self, entities: list[str], time_range: dict[str, str] | None = None
@@ -195,6 +203,51 @@ class SQLiteInteractions:
             "SQLiteInteractions.find_similar 需要 sqlite-vec 向量后端（v2 M3 交付）"
         )
 
+    def find_by_conversation(
+        self, source_conversation: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        rows = self._conn.execute(
+            "SELECT * FROM interaction_memory WHERE source_conv = ? "
+            "ORDER BY timestamp ASC, id ASC LIMIT ?",
+            (source_conversation, int(limit)),
+        ).fetchall()
+        return [self._to_domain(r) for r in rows]
+
+    def find_similar(self, query_vector: list[float], top_k: int = 5) -> list[dict[str, Any]]:
+        if not self._embedding:
+            raise StorageNotSupported(
+                "SQLiteInteractions.find_similar 需要注入 EmbeddingProvider"
+            )
+        rows = self._conn.execute(
+            "SELECT e.interaction_id, e.vector FROM interaction_embeddings e "
+            "JOIN interaction_memory m ON m.id = e.interaction_id "
+            "WHERE m.status != 'content_wiped'"
+        ).fetchall()
+        if not rows:
+            return []
+        q = list(query_vector)
+        q_norm = _norm(q)
+        if q_norm == 0:
+            return []
+        scored = []
+        for r in rows:
+            vec = from_json(r["vector"])
+            n = _norm(vec)
+            if n == 0:
+                continue
+            sim = sum(a * b for a, b in zip(q, vec)) / (q_norm * n)
+            scored.append((sim, r["interaction_id"]))
+        scored.sort(key=lambda t: (-t[0], t[1]))
+        top = [iid for _, iid in scored[: max(1, int(top_k))]]
+        result = []
+        for iid in top:
+            row = self._conn.execute(
+                "SELECT * FROM interaction_memory WHERE id = ?", (iid,)
+            ).fetchone()
+            if row is not None:
+                result.append(self._to_domain(row))
+        return result
+
     def touch_access(self, ids: list[int], now: str) -> None:
         if not ids:
             return
@@ -206,7 +259,7 @@ class SQLiteInteractions:
 
     def scan_decay_candidates(self) -> list[dict[str, Any]]:
         rows = self._conn.execute(
-            "SELECT id, status, vector_indexed, content, last_accessed "
+            "SELECT id, status, vector_indexed, content, type, entities, last_accessed "
             "FROM interaction_memory WHERE status != 'content_wiped' ORDER BY id"
         ).fetchall()
         return [
@@ -215,6 +268,8 @@ class SQLiteInteractions:
                 "status": r["status"],
                 "vector_indexed": r["vector_indexed"],
                 "content": r["content"],
+                "type": r["type"],
+                "entities": from_json(r["entities"]),
                 "last_accessed": r["last_accessed"],
             }
             for r in rows
@@ -236,6 +291,11 @@ class SQLiteInteractions:
             "UPDATE interaction_memory SET vector_indexed = 0 WHERE id = ?",
             [(i,) for i in ids],
         )
+        # §13.5 F4 对齐：向量删除阶段同步删向量行
+        self._conn.executemany(
+            "DELETE FROM interaction_embeddings WHERE interaction_id = ?",
+            [(i,) for i in ids],
+        )
         self._conn.commit()
 
     def wipe_content(self, ids: list[int]) -> None:
@@ -243,6 +303,10 @@ class SQLiteInteractions:
             return
         self._conn.executemany(
             "UPDATE interaction_memory SET content = NULL, status = 'content_wiped' WHERE id = ?",
+            [(i,) for i in ids],
+        )
+        self._conn.executemany(
+            "DELETE FROM interaction_embeddings WHERE interaction_id = ?",
             [(i,) for i in ids],
         )
         self._conn.commit()
@@ -367,6 +431,43 @@ class SQLitePatterns:
         self._conn.commit()
         return int(cur.lastrowid)
 
+    def upsert_from_cluster(
+        self,
+        pattern: str,
+        confidence: float,
+        evidence_count: int,
+        last_accessed: str,
+    ) -> dict[str, Any]:
+        row = self._conn.execute(
+            "SELECT id, confidence, evidence_count FROM long_term_patterns WHERE pattern = ?",
+            (pattern,),
+        ).fetchone()
+        if row is None:
+            new_id = self.insert_pattern(pattern, confidence, last_accessed, last_accessed, evidence_count)
+            return {
+                "id": new_id,
+                "pattern": pattern,
+                "confidence": confidence,
+                "evidence_count": evidence_count,
+                "merged": False,
+            }
+        # §7.3 原则：confidence 只增不减；evidence_count 累计
+        new_conf = max(float(row["confidence"]), float(confidence))
+        new_evidence = int(row["evidence_count"]) + int(evidence_count)
+        self._conn.execute(
+            "UPDATE long_term_patterns SET confidence = ?, evidence_count = ?, "
+            "last_accessed = ? WHERE id = ?",
+            (new_conf, new_evidence, last_accessed, row["id"]),
+        )
+        self._conn.commit()
+        return {
+            "id": row["id"],
+            "pattern": pattern,
+            "confidence": new_conf,
+            "evidence_count": new_evidence,
+            "merged": True,
+        }
+
 
 # ---------------------------------------------------------------------------
 # 2d
@@ -451,9 +552,11 @@ class SQLiteStorage:
         self,
         conn: sqlite3.Connection,
         snapshot_dir: Path | str | None = None,
+        embedding_provider=None,
     ) -> None:
         self.conn = conn
-        self.interactions = SQLiteInteractions(conn)
+        self.embedding_provider = embedding_provider
+        self.interactions = SQLiteInteractions(conn, embedding_provider)
         self.entities = SQLiteEntities(conn)
         self.patterns = SQLitePatterns(conn)
         self.ledger = SQLiteLedger(conn)
@@ -464,13 +567,23 @@ class SQLiteStorage:
             self.snapshots = FileSnapshotStore(Path(snapshot_dir))
 
     @classmethod
-    def from_config(cls, config) -> "SQLiteStorage":
+    def from_config(cls, config, embedding_provider="__default__") -> "SQLiteStorage":
+        """默认注入 HashingEmbeddingProvider（本地、零依赖、确定性）；
+        显式传 None 关闭向量写入；传自定义 provider 接入本地小模型 / API。"""
+        if embedding_provider == "__default__":
+            from .embedding import HashingEmbeddingProvider
+
+            embedding_provider = HashingEmbeddingProvider()
         conn = connect(config.db_path)
         init_schema(conn)
-        return cls(conn, config.snapshot_dir)
+        return cls(conn, config.snapshot_dir, embedding_provider)
 
     def close(self) -> None:
         self.conn.close()
+
+
+def _norm(vec: list[float]) -> float:
+    return sum(x * x for x in vec) ** 0.5
 
 
 def get_connection(config) -> sqlite3.Connection:

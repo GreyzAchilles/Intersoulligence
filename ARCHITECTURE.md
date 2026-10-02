@@ -640,15 +640,15 @@ v1 经代码核实的三个写侧缺口（2026-10-01 盘点）：
 
 **耦合现状（2026-10-01 代码盘点）**：22 处 SQL 执行点全部封闭在 `memory_recall` / `memory_write` / `persistence` 三模块的 7 个仓储函数内；harness 与 mcp_server 零 SQL；出口已是后端无关 dict（Row 按名取值 → 手写映射）；F1/F2 快照已是 JSON 文件、天然后端无关。改造属边界清晰的中等重构：生产侧约 15 个函数去 conn 化，测试侧约 25 个改动点；C5/C6/D7/D8/E1/B*/G* 纯逻辑层零改动。
 
-**仓储划分与方法契约**：
+**仓储划分与方法契约**（v2 M2-M4 实施后为完整版；新增方法以粗体标注）：
 
 | 仓储（Port） | 方法 | 现有挂点 |
 |---|---|---|
-| `InteractionRepo`（2a） | `append_entry`（D1 新增）/ `append_batch`（D2 新增）/ `find_by_entities` / `find_similar`（§13.5 语义召回）/ `touch_access` / `decay_scan` | C1 内 `_query_2a` + F4 2a 段 |
-| `EntityRepo`（2b） | `get` / `upsert_field` | C2 + D9 |
-| `PatternRepo`（2c） | `query` / `upsert_from_cluster`（§13.5 聚类） | C3 |
-| `LedgerRepo`（2d） | `append` / `recent` | D6 + C4 |
-| `SnapshotStore` | `save` / `load` | F1/F2（现有 JSON 文件实现直接转正） |
+| `InteractionRepo`（2a） | `append_entry`（D1）/ `append_batch`（D2）/ `find_by_entities` / **`find_by_conversation`（F3 轨迹）** / `find_similar` / `touch_access` / `scan_decay_candidates` / `mark_status` / `clear_vector_index` / `wipe_content` | C1 + F4 + Scribe/F3 |
+| `EntityRepo`（2b） | `get` / `ensure` / `get_field` / `set_field` | C2 + D9 + F3 |
+| `PatternRepo`（2c） | `query` / `touch_access` / `insert_pattern` / **`upsert_from_cluster`（Librarian）** | C3 + 2c 聚类 |
+| `LedgerRepo`（2d） | `append` / `recent` / `scan_expired` / `delete` | D6 + C4 + F4 |
+| `SnapshotStore` | `save` / `load_latest` | F1/F2（JSON 文件实现） |
 
 **EmbeddingProvider 独立接口**：向量生成与存储解耦；默认本地小模型（1B-7B 量化方向），可配置 API。
 
@@ -661,7 +661,7 @@ v1 经代码核实的三个写侧缺口（2026-10-01 盘点）：
 
 **实现矩阵**：`SQLiteAdapter`（参考实现，v1 schema 平移）→ `sqlite-vec` 向量后端（同库扩展，零部署，契合分发）→ 关系型第二后端（接口就绪，不在 v2 交付）。
 
-> **实施状态（2026-10-01，M1 完成）**：契约与参考实现已落地 `persona_runtime/storage/`（base.py 端口 + sqlite_adapter.py + file_snapshot.py），`db.py` 转兼容 shim；C1-C4 / D6 / D9 / F1 / F2 / F4、harness / mcp_server / demo 全部去 conn 化挂 backend；4 处方言移植点消除（DDL 去 datetime('now') 默认值、F4 日期算术 Python 侧 `_compute_2a_transitions`、find_by_entities 语义方法化、行协议 dict + LIMIT 参数化）；`tests/test_storage.py` 契约单测 20 用例。验收：230 用例全过（v1 行为不变）+ 覆盖率 93% + demo 12/12 + MCP 冒烟。M2 起的 D1/D2 写侧将直接基于 InteractionRepo.append_entry / append_batch（M1 已随适配器实现）。
+> **实施状态（2026-10-02，M1-M5 全部完成）**：契约与参考实现落地 `persona_runtime/storage/`；全部生产路径挂 backend；M2 写侧（D1/D2/Scribe/F3）、M3 语义召回（HashingEmbeddingProvider 默认注入 + interaction_embeddings 表 + 暴力余弦 find_similar + C1 双路 + C5 语义封顶）、M4 演化应用（upsert_from_cluster + librarian 规则聚类 + overlay/A11 + prompt 合成）全部就绪。ADR-1 门槛实测：冷启动含首调 52ms（<1s）、process_turn p99 4.49ms（<50ms）。实施注记与偏差见 §13.7；逐阶段问题汇报见 `REPORT-v2.md`。
 
 **MCP 侧**：`persona_layer2_query` / `persona_runtime_op` 的 conn 参数改为注入 backend；对 LLM / work agent 的 5 工具面不变。
 
@@ -762,3 +762,20 @@ persona-bundle/
 | 7 / 8 / 9（评分口径 / 自评偏差 / 模型 ID） | 属 E2E 基准，随产品成型阶段处理 |
 | 10（system_prompt 与 yaml 重复） | M1 重构时评估 |
 | 11（测试覆盖盲区） | M1 重构时自然收敛 |
+
+### 13.7 M2-M5 实施注记与偏差（2026-10-02）
+
+> 设计 → 实施的偏差与如实声明。逐阶段的问题汇报与待用户意见项见 `REPORT-v2.md`。
+
+| 项 | 设计（§13.3-13.5） | 实施现状 | 理由 / 升级路径 |
+|---|---|---|---|
+| EmbeddingProvider 默认实现 | 本地小模型（1B-7B 量化） | `HashingEmbeddingProvider`：字符 bigram 哈希 dim=256，本地零依赖确定性 | 避免引入模型运行时依赖；dim=64 实测有碰撞对消失真（已修）；真语义模型只需实现端口注入 |
+| 向量检索 | sqlite-vec 虚表 | 纯 Python 暴力余弦（`interaction_embeddings` 表 + JSON 向量） | 单用户万行量级可用；千行实测毫秒级；性能债 → sqlite-vec / numpy 升级 |
+| Scribe 提取 | 对话→2a 提取 | 规则提取起步（偏好/事实/事件三类模式 + 实体白名单） | 零 LLM 依赖可单测；`extract_fn` 参数为 LLM 提取挂点 |
+| Librarian 聚类 | 聚类由 LLM 完成 | 规则聚类起步（贪心凝聚 + 余弦相似度） | 同上；`cluster_fn` 参数为 LLM 聚类挂点 |
+| 2a type 枚举 | 五类（observation/reflection/preference/event/state） | 扩展 `episode`（F3 会话总结落点） | §13.5 F3 契约要求 episode 条目落 2a |
+| overlay 承载形态 | Layer 1 演化覆盖层 | `layer1_overrides`（结构化深合并）+ `adjustments`（2d 文字指令渲染为 prompt 调整段） | 2d 的自由文本无法自动映射为 yaml 字段；prompt 级演化是诚实的最小机制 |
+| overlay 语义召回联动 | — | overlay 不参与向量检索（仅 prompt 合成） | 演化指令是「怎么说话」不是「经历过什么」 |
+| persona bundle（§13.4） | bundle 规范 | **未实施**（目录结构 / manifest / JSONL 交换 / .isoul） | M1-M5 里程碑不含 bundle 实施；markdown 投影（content/sessions/）已按「DB 为源」原则落地；bundle 落地随 v3 H1/H2 |
+| F4 清空与向量 | 30-90 天删向量索引 | `clear_vector_index` / `wipe_content` 同步删 `interaction_embeddings` 行 | 与 vector_indexed 状态机一致 |
+| 默认向量写入 | D1/D2 写入时生成向量 | `from_config` 默认注入 provider，写入即入索引；显式 None 关闭 | 开箱即有语义召回；vector_indexed 语义从「预留」转「真实」 |

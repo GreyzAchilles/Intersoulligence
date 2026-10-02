@@ -90,8 +90,14 @@ class InteractionRepo(Protocol):
         """
         ...
 
+    def find_by_conversation(
+        self, source_conversation: str, limit: int = 200
+    ) -> list[dict[str, Any]]:
+        """按来源会话取 2a 轨迹（F3 会话总结用），按 timestamp 正序。"""
+        ...
+
     def find_similar(self, query_vector: list[float], top_k: int = 5) -> list[dict[str, Any]]:
-        """语义召回（M3 接入向量后端后启用）；不支持的后端抛 StorageNotSupported。"""
+        """语义召回（向量后端启用后生效）；不支持的后端抛 StorageNotSupported。"""
         ...
 
     def touch_access(self, ids: list[int], now: str) -> None:
@@ -101,7 +107,8 @@ class InteractionRepo(Protocol):
     def scan_decay_candidates(self) -> list[dict[str, Any]]:
         """返回未到终态（status != 'content_wiped'）的 2a 行，供 F4 做 Python 侧阈值计算。
 
-        返回字段：id / status / vector_indexed / content / last_accessed。
+        返回字段：id / status / vector_indexed / content / type / entities(list) /
+        last_accessed。
         """
         ...
 
@@ -166,6 +173,20 @@ class PatternRepo(Protocol):
         evidence_count: int = 0,
     ) -> int:
         """插入新模式（M4 upsert_from_cluster 的存储原语）。pattern 重复 → 抛错。"""
+        ...
+
+    def upsert_from_cluster(
+        self,
+        pattern: str,
+        confidence: float,
+        evidence_count: int,
+        last_accessed: str,
+    ) -> dict[str, Any]:
+        """Librarian 聚类结果落库（M4 deep cycle）。
+
+        pattern 已存在（UNIQUE 命中）→ confidence 只增不减 + evidence_count 累计；
+        不存在 → 新建。返回 {id, pattern, confidence, evidence_count, merged}。
+        """
         ...
 
 

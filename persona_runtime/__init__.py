@@ -23,13 +23,16 @@ from .db import connect, get_connection, init_schema
 from .harness import Harness, create_harness
 from .storage import SQLiteStorage, StorageBackend
 from . import (
+    librarian,
     memory_recall,
     memory_write,
+    overlay,
     persistence,
     scheduler,
     schema_loader,
     self_check,
     signal_parser,
+    scribe,
     storage,
 )
 
@@ -45,6 +48,8 @@ __all__ = [
     "StorageBackend",
     "Harness",
     "create_harness",
+    "librarian",
+    "overlay",
     "schema_loader",
     "signal_parser",
     "memory_recall",
@@ -52,5 +57,6 @@ __all__ = [
     "self_check",
     "persistence",
     "scheduler",
+    "scribe",
     "storage",
 ]
